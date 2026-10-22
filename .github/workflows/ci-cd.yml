@@ -52,11 +52,20 @@ jobs:
       - run: npm ci
 
       - name: Write .env from secrets
+        env:
+          INTERNAL_API_SECRET: ${{ secrets.INTERNAL_API_SECRET }}
         run: |
           cat <<EOF > .env.my-store-prd
           MONGODB_URI=${{ secrets.MONGODB_URI }}
           FRONTEND_URL=${{ secrets.FRONTEND_URL }}
           EOF
+          # Rota interna do cardápio digital (/internal/*): mesmo valor do my-store-cardapio-web-back-api.
+          # Sem ele (ou com menos de 32 caracteres) a rota interna fica fechada (401); o resto da API funciona.
+          if [ "${#INTERNAL_API_SECRET}" -lt 32 ]; then
+            echo "::warning::INTERNAL_API_SECRET ausente ou curto: pedidos e 'ao vivo' do cardápio não vão funcionar em produção"
+          else
+            echo "INTERNAL_API_SECRET=$INTERNAL_API_SECRET" >> .env.my-store-prd
+          fi
 
       - run: npm run build
 
