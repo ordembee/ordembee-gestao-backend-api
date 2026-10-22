@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   Logger,
   NotFoundException,
@@ -11,6 +12,8 @@ import {
   OrderDocument,
   OrderFulfillment,
   OrderPaymentKind,
+  OrderRequestedPayment,
+  OrderSource,
   OrderStatus,
 } from './schemas/order.schema';
 import {
@@ -52,6 +55,28 @@ const OPEN_STATUSES = [
 /** Status que o endpoint de status pode aplicar — entrega e cancelamento tem rota propria. */
 const MANUAL_STATUSES = OPEN_STATUSES;
 
+/**
+ * Pedido do cardapio nasce com `deliveryAt` = hora da chegada (o cliente pede
+ * "o quanto antes"), entao sem folga ele ja apareceria atrasado ao chegar.
+ * So conta como atrasado depois desse tempo. Mesma regra no front
+ * (`isOrderLate` em utils/orders.ts).
+ */
+export const MENU_ORDER_LATE_GRACE_MS = 60 * 60 * 1000;
+
+/** Filtro de "atrasada": em aberto e passou da hora (com a folga do cardapio). */
+export function lateOrdersFilter(now: Date): Record<string, unknown> {
+  return {
+    status: { $in: OPEN_STATUSES },
+    $or: [
+      { source: { $ne: OrderSource.CARDAPIO }, deliveryAt: { $lt: now } },
+      {
+        source: OrderSource.CARDAPIO,
+        deliveryAt: { $lt: new Date(now.getTime() - MENU_ORDER_LATE_GRACE_MS) },
+      },
+    ],
+  };
+}
+
 interface BuiltItem {
   productId: Types.ObjectId;
   productName: string;
@@ -66,6 +91,14 @@ interface BuiltItem {
     quantity: number;
   }[];
   notes?: string;
+  options?: OrderItemOptionInput[];
+}
+
+/** Complemento ja resolvido (nome/preco) que acompanha o item — so pedidos do cardapio. */
+export interface OrderItemOptionInput {
+  groupName: string;
+  name: string;
+  price: number;
 }
 
 /** Quantidade de estoque a consumir (positivo) ou devolver (negativo) por produto. */
@@ -73,6 +106,15 @@ type StockDelta = Map<
   string,
   { productId: Types.ObjectId; productName: string; quantity: number }
 >;
+
+/** Baixa ja aplicada por `reserveStock` — base do historico e do estorno. */
+interface StockReservation {
+  productId: Types.ObjectId;
+  productName: string;
+  quantity: number;
+  previousStock: number;
+  newStock: number;
+}
 
 export interface OrderWithTotals {
   amountPaid: number;
@@ -139,7 +181,7 @@ export class OrdersService {
   /** Monta os itens completos (nome, custo, lucro, receita de combo) a partir do DTO. */
   private async buildItems(
     businessId: string,
-    dtoItems: OrderItemDto[],
+    dtoItems: (OrderItemDto & { options?: OrderItemOptionInput[] })[],
   ): Promise<BuiltItem[]> {
     const productIds = dtoItems.map((i) => new Types.ObjectId(i.productId));
     const products = await this.productModel
@@ -183,6 +225,7 @@ export class OrdersService {
             }))
           : [],
         notes: item.notes,
+        ...(item.options?.length ? { options: item.options } : {}),
       };
     });
   }
@@ -239,6 +282,83 @@ export class OrdersService {
   }
 
   /**
+   * Baixa CONDICIONAL do estoque (pedidos do cardapio): cada produto
+   * controlado so desce se tiver a quantidade inteira (`stock >= qty`), num
+   * update atomico — dois pedidos simultaneos nao furam o estoque. Se algum
+   * faltar, desfaz o que ja baixou e recusa sem dizer quanto resta.
+   * Sem controle de estoque (-1) nao entra. Pedidos internos seguem em
+   * `applyStockDelta`, que pode vender alem do estoque.
+   */
+  private async reserveStock(
+    businessId: string,
+    delta: StockDelta,
+  ): Promise<StockReservation[]> {
+    const entries = Array.from(delta.values()).filter((e) => e.quantity > 0);
+    if (entries.length === 0) return [];
+    const bizObjectId = new Types.ObjectId(businessId);
+    const tracked = await this.productModel
+      .find({
+        _id: { $in: entries.map((e) => e.productId) },
+        businessId: bizObjectId,
+        stock: { $ne: -1 },
+      })
+      .select('_id')
+      .lean()
+      .exec();
+    const trackedIds = new Set(tracked.map((p) => String(p._id)));
+
+    const reserved: StockReservation[] = [];
+    for (const entry of entries) {
+      if (!trackedIds.has(String(entry.productId))) continue;
+      const before = await this.productModel
+        .findOneAndUpdate(
+          {
+            _id: entry.productId,
+            businessId: bizObjectId,
+            stock: { $gte: entry.quantity },
+          },
+          { $inc: { stock: -entry.quantity } },
+          { new: false, projection: { stock: 1, name: 1 } },
+        )
+        .lean<{ stock: number; name: string }>()
+        .exec();
+      if (!before) {
+        await this.releaseStock(businessId, reserved);
+        throw new ConflictException({
+          statusCode: 409,
+          reason: 'INSUFFICIENT_STOCK',
+          message: `Quantidade indisponível para ${entry.productName}`,
+        });
+      }
+      reserved.push({
+        productId: entry.productId,
+        productName: before.name ?? entry.productName,
+        quantity: entry.quantity,
+        previousStock: before.stock,
+        newStock: before.stock - entry.quantity,
+      });
+    }
+    return reserved;
+  }
+
+  /** Estorno de `reserveStock` (pedido nao chegou a ser criado). */
+  private async releaseStock(
+    businessId: string,
+    reserved: StockReservation[],
+  ): Promise<void> {
+    if (!reserved.length) return;
+    const bizObjectId = new Types.ObjectId(businessId);
+    await this.productModel.bulkWrite(
+      reserved.map((r) => ({
+        updateOne: {
+          filter: { _id: r.productId, businessId: bizObjectId },
+          update: { $inc: { stock: r.quantity } },
+        },
+      })),
+    );
+  }
+
+  /**
    * Aplica o delta no estoque e grava o historico.
    * quantidade > 0 = consumir (movimento `encomenda`);
    * quantidade < 0 = devolver (movimento `cancelamento`).
@@ -246,7 +366,7 @@ export class OrdersService {
    */
   private async applyStockDelta(
     businessId: string,
-    userId: Types.ObjectId,
+    userId: Types.ObjectId | undefined,
     order: { _id: Types.ObjectId; code: number },
     delta: StockDelta,
     reason: string,
@@ -505,6 +625,191 @@ export class OrdersService {
     return this.withTotals(order);
   }
 
+  /** Pedido do cardapio ja criado com este `orderRef` (retry idempotente). */
+  async findMenuOrderByRef(
+    businessId: string,
+    externalRef: string,
+  ): Promise<{ code: number; total: number } | null> {
+    const order = await this.orderModel
+      .findOne({ businessId: new Types.ObjectId(businessId), externalRef })
+      .select('code total')
+      .lean<{ code: number; total: number }>()
+      .exec();
+    return order ? { code: order.code, total: order.total } : null;
+  }
+
+  /**
+   * Pedidos do cardapio que a loja recebeu desde `since` (qualquer status:
+   * pedido falso cancelado tambem conta). Usa o indice (businessId, source, createdAt).
+   */
+  countMenuOrdersSince(businessId: string, since: Date): Promise<number> {
+    return this.orderModel
+      .countDocuments({
+        businessId: new Types.ObjectId(businessId),
+        source: OrderSource.CARDAPIO,
+        createdAt: { $gte: since },
+      })
+      .exec();
+  }
+
+  /**
+   * Encomenda vinda do cardapio digital (rota interna, sem usuario logado).
+   * Quem chama ja validou loja/produtos e resolveu o cliente; os `unitPrice`
+   * aqui SAO os do banco — nunca o preco enviado pelo cliente.
+   * Idempotente por `externalRef`: um retry devolve a encomenda ja criada.
+   */
+  async createFromMenu(input: {
+    businessId: string;
+    externalRef: string;
+    customer: CustomerDocument;
+    items: (OrderItemDto & { options?: OrderItemOptionInput[] })[];
+    fulfillment: OrderFulfillment;
+    deliveryFee: number;
+    customerAddress?: string;
+    requestedPayment: OrderRequestedPayment;
+    notes?: string;
+  }): Promise<Order & OrderWithTotals> {
+    const { businessId, externalRef, customer } = input;
+    const bizObjectId = new Types.ObjectId(businessId);
+
+    const existing = await this.orderModel
+      .findOne({ businessId: bizObjectId, externalRef })
+      .exec();
+    if (existing) {
+      this.logger.warn(
+        `Pedido do cardápio repetido (idempotente): ref=${externalRef} | #${existing.code}`,
+      );
+      return this.withTotals(existing);
+    }
+
+    const items = await this.buildItems(businessId, input.items);
+    const itemsTotal = this.round(
+      items.reduce((sum, item) => sum + item.subtotal, 0),
+    );
+    const deliveryFee = this.round(input.deliveryFee);
+    const total = this.round(itemsTotal + deliveryFee);
+    const totalProfit = this.round(
+      items.reduce((sum, item) => sum + item.profit, 0),
+    );
+    const now = new Date();
+    // Reserva antes de criar: sem estoque, nem gasta numero de pedido.
+    const reserved = await this.reserveStock(
+      businessId,
+      this.buildStockDelta(items),
+    );
+    let code: number;
+    let order: OrderDocument;
+    try {
+      code = await this.nextCode(businessId);
+      order = await this.orderModel.create({
+        code,
+        businessId: bizObjectId,
+        source: OrderSource.CARDAPIO,
+        externalRef,
+        customerId: customer._id,
+        customerName: customer.name,
+        customerPhone: customer.phone,
+        customerAddress: input.customerAddress,
+        items,
+        itemsTotal,
+        deliveryFee,
+        total,
+        totalProfit,
+        deliveryAt: now,
+        hasDeliveryTime: true,
+        fulfillment: input.fulfillment,
+        status: OrderStatus.PENDENTE,
+        tags: [],
+        notes: input.notes,
+        payments: [],
+        requestedPayment: input.requestedPayment,
+        statusHistory: [
+          {
+            status: OrderStatus.PENDENTE,
+            at: now,
+            userName: 'Cardápio digital',
+          },
+        ],
+      });
+    } catch (err) {
+      await this.releaseStock(businessId, reserved);
+      // Dois retries simultaneos: o indice unico (businessId, externalRef) barra o segundo.
+      const duplicate =
+        (err as { code?: number }).code === 11000
+          ? await this.orderModel
+              .findOne({ businessId: bizObjectId, externalRef })
+              .exec()
+          : null;
+      if (duplicate) return this.withTotals(duplicate);
+      throw err;
+    }
+
+    await Promise.all(
+      reserved.map((r) =>
+        this.stockMovementsService.recordSaleMovement(
+          {
+            productId: r.productId,
+            productName: r.productName,
+            businessId: bizObjectId,
+            type: MovementType.ENCOMENDA,
+            quantity: r.quantity,
+            reason: `Encomenda (cardápio) #${code}`,
+            orderId: order._id as Types.ObjectId,
+          },
+          r.previousStock,
+          r.newStock,
+        ),
+      ),
+    );
+
+    this.logger.log(
+      `Encomenda do cardápio: #${code} (${order._id.toString()}) | negócio: ${businessId} | total: ${total} | ref: ${externalRef}`,
+    );
+    return this.withTotals(order);
+  }
+
+  /**
+   * Feed leve para o alerta de pedido novo: so pedidos do cardapio, so os
+   * campos do aviso. `since` e limitado as ultimas 24h para a consulta nunca
+   * varrer o historico; o cliente reenvia com uma folga e deduplica por id.
+   */
+  async getMenuFeed(
+    businessId: string,
+    since?: string,
+  ): Promise<{
+    serverTime: string;
+    orders: { _id: string; code: number; customerName: string; total: number; fulfillment: OrderFulfillment; createdAt: string }[];
+  }> {
+    const now = new Date();
+    const floor = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const parsed = since ? new Date(since) : now;
+    const from = isNaN(parsed.getTime()) || parsed < floor ? floor : parsed;
+
+    const orders = await this.orderModel
+      .find({
+        businessId: new Types.ObjectId(businessId),
+        source: OrderSource.CARDAPIO,
+        createdAt: { $gt: from },
+      })
+      .sort({ createdAt: 1 })
+      .limit(20)
+      .select('code customerName total fulfillment createdAt')
+      .lean<{ _id: Types.ObjectId; code: number; customerName: string; total: number; fulfillment: OrderFulfillment; createdAt: Date }[]>()
+      .exec();
+
+    return {
+      serverTime: now.toISOString(),
+      orders: orders.map((o) => ({
+        _id: String(o._id),
+        code: o.code,
+        customerName: o.customerName,
+        total: o.total,
+        fulfillment: o.fulfillment,
+        createdAt: o.createdAt.toISOString(),
+      })),
+    };
+  }
+
   async findAll(
     businessId: string,
     params: {
@@ -529,9 +834,9 @@ export class OrdersService {
       businessId: new Types.ObjectId(businessId),
     };
 
-    // A ordenacao muda com o recorte: pendentes sobem pela data de entrega mais
-    // proxima; entregues de hoje descem pela hora da entrega (mais recente no topo).
-    let sort: Record<string, 1 | -1> = { deliveryAt: 1 };
+    // Mais novo primeiro (pedido do usuario): o que acabou de chegar fica no
+    // topo. "Entregues hoje" segue pela hora da entrega, mais recente no topo.
+    let sort: Record<string, 1 | -1> = { createdAt: -1, _id: -1 };
 
     if (scope === 'today') {
       const { start, end } = zonedTodayRange(tz);
@@ -545,8 +850,8 @@ export class OrdersService {
     } else if (scope === 'open') {
       filter.status = { $in: OPEN_STATUSES };
     } else if (scope === 'late') {
-      filter.status = { $in: OPEN_STATUSES };
-      filter.deliveryAt = { $lt: new Date() };
+      // $and: a busca abaixo tambem usa $or.
+      filter.$and = [lateOrdersFilter(new Date())];
     }
 
     const dateFilter = instantRangeFilter(params.dateFrom, params.dateTo, tz);
@@ -635,15 +940,7 @@ export class OrdersService {
             },
             { $group: { _id: null, n: { $sum: 1 }, revenue: { $sum: '$total' } } },
           ],
-          late: [
-            {
-              $match: {
-                status: { $in: OPEN_STATUSES },
-                deliveryAt: { $lt: now },
-              },
-            },
-            { $count: 'n' },
-          ],
+          late: [{ $match: lateOrdersFilter(now) }, { $count: 'n' }],
           due: [
             { $match: { status: { $in: OPEN_STATUSES } } },
             {

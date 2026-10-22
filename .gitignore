@@ -6,3 +6,4 @@
 .env.my-store-prd
 /node_modules
 /dist
+.env.my-store-stg

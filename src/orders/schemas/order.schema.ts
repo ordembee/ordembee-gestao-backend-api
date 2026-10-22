@@ -30,6 +30,12 @@ export enum OrderFulfillment {
   ENTREGA = 'ENTREGA',
 }
 
+/** Onde a encomenda nasceu: sistema interno ou cardapio digital publico. */
+export enum OrderSource {
+  INTERNO = 'INTERNO',
+  CARDAPIO = 'CARDAPIO',
+}
+
 /** Sinal (entrada) ou quitacao no ato da entrega. */
 export enum OrderPaymentKind {
   SINAL = 'SINAL',
@@ -46,6 +52,19 @@ class OrderComboComponent {
 
   @Prop({ required: true, min: 1 })
   quantity: number;
+}
+
+/** Complemento escolhido no item (snapshot: nome e preco do momento do pedido). */
+@Schema({ _id: false })
+class OrderItemOption {
+  @Prop({ required: true })
+  groupName: string;
+
+  @Prop({ required: true })
+  name: string;
+
+  @Prop({ required: true, min: 0, default: 0 })
+  price: number;
 }
 
 @Schema({ _id: false })
@@ -78,6 +97,10 @@ class OrderItem {
   /** Observacao do item ("sem cebola", "escrever Feliz Natal"). */
   @Prop()
   notes?: string;
+
+  /** Complementos escolhidos (cardapio digital). `unitPrice` ja inclui os precos deles. */
+  @Prop({ type: [OrderItemOption], default: undefined })
+  options?: OrderItemOption[];
 }
 
 @Schema({ _id: false })
@@ -88,7 +111,11 @@ class OrderPayment {
   @Prop({ required: true, min: 0 })
   amount: number;
 
-  @Prop({ type: String, enum: OrderPaymentKind, default: OrderPaymentKind.SINAL })
+  @Prop({
+    type: String,
+    enum: OrderPaymentKind,
+    default: OrderPaymentKind.SINAL,
+  })
   kind: OrderPaymentKind;
 
   @Prop({ default: () => new Date() })
@@ -127,7 +154,31 @@ class OrderStatusEvent {
   userName?: string;
 }
 
-export { OrderItem, OrderPayment, OrderStatusEvent, OrderDiscount };
+/**
+ * Forma de pagamento que o cliente ESCOLHEU no cardapio. Nao e pagamento
+ * registrado: o dinheiro so entra em `payments` quando alguem recebe de fato.
+ */
+@Schema({ _id: false })
+class OrderRequestedPayment {
+  @Prop({ type: String, enum: PaymentMethod, required: true })
+  method: PaymentMethod;
+
+  /** Bandeira do cartao ('visa', 'master', ...) — so para cartao. */
+  @Prop()
+  brand?: string;
+
+  /** Troco para quanto (dinheiro). */
+  @Prop({ min: 0 })
+  changeFor?: number;
+}
+
+export {
+  OrderItem,
+  OrderPayment,
+  OrderStatusEvent,
+  OrderDiscount,
+  OrderRequestedPayment,
+};
 
 @Schema({ timestamps: true })
 export class Order {
@@ -138,9 +189,19 @@ export class Order {
   @Prop({ type: Types.ObjectId, ref: 'Business', required: true })
   businessId: Types.ObjectId;
 
-  /** Quem registrou a encomenda. */
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true })
-  userId: Types.ObjectId;
+  /** Quem registrou a encomenda. Ausente quando veio do cardapio digital (`source`). */
+  @Prop({ type: Types.ObjectId, ref: 'User' })
+  userId?: Types.ObjectId;
+
+  @Prop({ type: String, enum: OrderSource, default: OrderSource.INTERNO })
+  source: OrderSource;
+
+  /** Referencia do pedido no cardapio — chave de idempotencia (retry nao duplica). */
+  @Prop()
+  externalRef?: string;
+
+  @Prop({ type: OrderRequestedPayment })
+  requestedPayment?: OrderRequestedPayment;
 
   @Prop({ type: Types.ObjectId, ref: 'Customer', required: true })
   customerId: Types.ObjectId;
@@ -237,3 +298,12 @@ OrderSchema.index({ businessId: 1, deliveryAt: 1 });
 OrderSchema.index({ businessId: 1, status: 1, deliveryAt: 1 });
 OrderSchema.index({ businessId: 1, customerId: 1 });
 OrderSchema.index({ businessId: 1, tags: 1 });
+// Feed do alerta de pedido novo (OrdersService.getMenuFeed).
+OrderSchema.index({ businessId: 1, source: 1, createdAt: 1 });
+OrderSchema.index(
+  { businessId: 1, externalRef: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { externalRef: { $type: 'string' } },
+  },
+);

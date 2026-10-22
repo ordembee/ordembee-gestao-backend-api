@@ -1,0 +1,33 @@
+rules_version = '2';
+
+// Regras do Firebase Storage.
+//
+// Valem só para quem acessa pelo SDK cliente do Firebase / firebasestorage.googleapis.com.
+// O backend usa o Admin SDK (ignora estas regras) e as URLs públicas
+// storage.googleapis.com/... vêm do makePublic() (ACL do GCS, também fora daqui).
+//
+// A loja do usuário vem da custom claim `businessId`, definida pelo backend
+// (AuthService.setCustomClaims / UsersService.update).
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    function isMember(businessId) {
+      return request.auth != null
+        && request.auth.token.businessId == businessId;
+    }
+
+    // Só imagens raster até 5 MB. SVG fica de fora (pode carregar script).
+    function isValidImage() {
+      return request.resource.size < 5 * 1024 * 1024
+        && request.resource.contentType.matches('image/(jpeg|png|webp)');
+    }
+
+    match /business/{businessId}/{allPaths=**} {
+      allow read: if isMember(businessId);
+      allow create, update: if isMember(businessId) && isValidImage();
+      allow delete: if isMember(businessId);
+    }
+
+    // Qualquer outro caminho: negado (regra implícita do Firebase).
+  }
+}

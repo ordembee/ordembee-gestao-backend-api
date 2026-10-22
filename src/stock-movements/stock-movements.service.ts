@@ -12,7 +12,8 @@ export interface InternalMovementPayload {
   productId: Types.ObjectId;
   productName: string;
   businessId: Types.ObjectId;
-  userId: Types.ObjectId;
+  /** Ausente quando a movimentacao nasce fora de um usuario (pedido do cardapio). */
+  userId?: Types.ObjectId;
   type: MovementType;
   quantity: number;
   reason?: string;

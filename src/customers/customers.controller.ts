@@ -25,10 +25,19 @@ export class CustomersController {
     return this.customersService.findOne(id, user.businessId);
   }
 
-  @Get(':id/debt-history')
+  /** Historico de pedidos identificados (vendas + encomendas), paginado por `before`. */
+  @Get(':id/history')
   @Roles(Role.OWNER, Role.GERENTE)
-  getDebtHistory(@CurrentUser() user: any, @Param('id') id: string) {
-    return this.customersService.getDebtHistory(id, user.businessId);
+  getOrderHistory(
+    @CurrentUser() user: any,
+    @Param('id') id: string,
+    @Query('before') before?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.customersService.getOrderHistory(id, user.businessId, {
+      before: before || undefined,
+      limit: limit ? parseInt(limit, 10) : undefined,
+    });
   }
 
   @Patch(':id')

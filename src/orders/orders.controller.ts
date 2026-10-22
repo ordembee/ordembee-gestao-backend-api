@@ -59,6 +59,15 @@ export class OrdersController {
     return this.ordersService.getSummary(user.businessId);
   }
 
+  /**
+   * Pedidos do cardapio digital criados depois de `since` (ISO) — consultado
+   * a cada poucos segundos pelo painel para tocar o alerta de pedido novo.
+   */
+  @Get('menu-feed')
+  getMenuFeed(@CurrentUser() user: any, @Query('since') since?: string) {
+    return this.ordersService.getMenuFeed(user.businessId, since);
+  }
+
   @Get(':id')
   findOne(@CurrentUser() user: any, @Param('id') id: string) {
     return this.ordersService.findOne(id, user.businessId);

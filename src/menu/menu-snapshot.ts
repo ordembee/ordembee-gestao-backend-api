@@ -1,0 +1,377 @@
+import { createHash } from 'crypto';
+import type { MenuOpeningHours } from '../business/schemas/business.schema';
+
+/**
+ * Formato do JSON publicado em `menus/{slug}.json` e lido pelo cardapio e pelo
+ * my-store-cardapio-web-back-api. E um contrato publico: nunca coloque custo, estoque
+ * numerico, precificacao ou qualquer dado interno aqui.
+ */
+export interface MenuSnapshotOption {
+  id: string;
+  name: string;
+  price: number;
+}
+
+/** Grupo de complementos: o cliente marca entre `min` e `max` opcoes (min > 0 = obrigatorio). */
+export interface MenuSnapshotOptionGroup {
+  id: string;
+  name: string;
+  min: number;
+  max: number;
+  options: MenuSnapshotOption[];
+}
+
+export interface MenuSnapshotProduct {
+  id: string;
+  name: string;
+  description: string;
+  price: number;
+  imageUrl: string | null;
+  tag: string | null;
+  available: boolean;
+  optionGroups: MenuSnapshotOptionGroup[];
+}
+
+export interface MenuSnapshotCategory {
+  id: string;
+  name: string;
+  icon: string | null;
+  color: string | null;
+  products: MenuSnapshotProduct[];
+}
+
+export interface MenuSnapshotStore {
+  slug: string;
+  name: string;
+  description: string;
+  logoUrl: string | null;
+  coverUrl: string | null;
+  address: string;
+  whatsapp: string;
+  timezone: string;
+  deliveryFee: number;
+  /** false = a loja nao entrega (so retirada). */
+  deliveryEnabled: boolean;
+  pickupEnabled: boolean;
+  openingHours: MenuOpeningHours;
+  instagram: string;
+  /** Cor da marca (#RRGGBB) para o cardapio aplicar; null = cor padrao. */
+  themeColor: string | null;
+  /** PaymentMethod aceitos no cardapio (CARTAO_CREDITO, CARTAO_DEBITO, PIX, DINHEIRO). */
+  acceptedPayments: string[];
+}
+
+export interface MenuSnapshot {
+  version: number;
+  publishedAt: string;
+  store: MenuSnapshotStore;
+  categories: MenuSnapshotCategory[];
+}
+
+/** Campos do Product que o snapshot le — nada alem disso sai do banco. */
+export interface MenuSourceProduct {
+  _id: unknown;
+  name: string;
+  description?: string;
+  categoryId?: unknown;
+  imageUrl?: string;
+  stock?: number;
+  isActive?: boolean;
+  isCombo?: boolean;
+  /** Componentes do combo — a disponibilidade do combo vem deles. */
+  comboItems?: { productId: unknown; quantity: number }[];
+  prices?: {
+    caixa?: { value?: number; active?: boolean };
+    deliveryProprio?: { value?: number; active?: boolean };
+  };
+}
+
+/** Item do cardapio (Business.menu.items) — exibir, selo e ordem sao do cardapio, nao do produto. */
+export interface MenuSourceItem {
+  productId: unknown;
+  active?: boolean;
+  tag?: string;
+  order?: number;
+  optionGroupIds?: unknown[];
+}
+
+/** Grupo de complementos como gravado em Business.menu.optionGroups. */
+export interface MenuSourceOptionGroup {
+  _id?: unknown;
+  name: string;
+  min?: number;
+  max?: number;
+  active?: boolean;
+  options?: { _id?: unknown; name: string; price?: number; active?: boolean }[];
+}
+
+/**
+ * Grupos efetivos de um item: so os ativos, com opcoes ativas, na ordem do
+ * item. Normaliza min/max para o que da para cumprir. Regra unica: usada no
+ * snapshot E na validacao do pedido.
+ */
+export function resolveOptionGroups(
+  item: MenuSourceItem | undefined,
+  groups: MenuSourceOptionGroup[] | undefined,
+): MenuSnapshotOptionGroup[] {
+  const byId = new Map((groups ?? []).map((g) => [String(g._id), g]));
+  const result: MenuSnapshotOptionGroup[] = [];
+  for (const id of item?.optionGroupIds ?? []) {
+    const group = byId.get(String(id));
+    if (!group || group.active === false) continue;
+    const options = (group.options ?? [])
+      .filter((o) => o.active !== false)
+      .map((o) => ({
+        id: String(o._id),
+        name: o.name,
+        price: Math.round((o.price ?? 0) * 100) / 100,
+      }));
+    if (!options.length) continue;
+    const max = Math.min(Math.max(group.max ?? 1, 1), options.length);
+    const min = Math.min(Math.max(group.min ?? 0, 0), max);
+    result.push({ id: String(group._id), name: group.name, min, max, options });
+  }
+  return result;
+}
+
+export interface MenuSourceCategory {
+  _id: unknown;
+  name: string;
+  icon?: string;
+  color?: string;
+}
+
+/** Projecao usada nas consultas do snapshot e da rota interna de pedidos. */
+export const MENU_PRODUCT_FIELDS =
+  'name description categoryId imageUrl stock isActive isCombo comboItems.productId comboItems.quantity prices.caixa prices.deliveryProprio';
+
+/** productId -> item do cardapio. */
+export function indexMenuItems(
+  items: MenuSourceItem[] | undefined,
+): Map<string, MenuSourceItem> {
+  return new Map((items ?? []).map((i) => [String(i.productId), i]));
+}
+
+const OTHER_CATEGORY_ID = 'outros';
+
+export type MenuPriceSource = 'delivery' | 'caixa';
+
+/**
+ * Preco do cardapio = o que ja esta cadastrado no produto: canal Delivery
+ * proprio quando ativo e com valor; senao o preco de Caixa. O cardapio nao
+ * tem preco proprio — para mudar, edita-se o produto.
+ */
+export function menuPrice(
+  p: MenuSourceProduct,
+): { value: number; source: MenuPriceSource } | null {
+  const round = (v: number) => Math.round(v * 100) / 100;
+  const delivery = p.prices?.deliveryProprio;
+  if (delivery?.active && (delivery.value ?? 0) > 0) {
+    return { value: round(delivery.value!), source: 'delivery' };
+  }
+  const caixa = p.prices?.caixa?.value ?? 0;
+  return caixa > 0 ? { value: round(caixa), source: 'caixa' } : null;
+}
+
+/** Regra unica de "esta no cardapio": usada no snapshot E ao aceitar pedidos. */
+export function isProductOnMenu(
+  p: MenuSourceProduct,
+  item: MenuSourceItem | undefined,
+): boolean {
+  return !!(item?.active && p.isActive !== false && menuPrice(p));
+}
+
+/** productId -> estoque (inclui componentes de combos). */
+export type StockIndex = Map<string, number>;
+
+/** Abaixo disto (e acima de zero) o cardapio mostra "Ultimas unidades". */
+export const LOW_STOCK_THRESHOLD = 3;
+
+/** O que o cliente ve: nunca o numero do estoque, so o nivel. */
+export type MenuAvailability = 'ok' | 'low' | 'out';
+
+/** Ids dos componentes de combos — precisam ser carregados para medir o combo. */
+export function comboComponentIds(products: MenuSourceProduct[]): string[] {
+  const ids = new Set<string>();
+  for (const p of products) {
+    if (p.isCombo) for (const c of p.comboItems ?? []) ids.add(String(c.productId));
+  }
+  return [...ids];
+}
+
+/**
+ * Unidades que da para vender agora; null = sem limite (sem controle de
+ * estoque). Estoque -1 = sem controle; outros negativos = vendeu alem: zero.
+ * Combo = o menor numero de combos que os componentes controlados permitem
+ * (componente sem controle, ou que nao veio em `stocks`, nao limita).
+ */
+export function availableUnits(
+  p: MenuSourceProduct,
+  stocks?: StockIndex,
+): number | null {
+  if (p.isCombo) {
+    let units: number | null = null;
+    for (const c of p.comboItems ?? []) {
+      const stock = stocks?.get(String(c.productId));
+      if (stock === undefined || stock === -1) continue;
+      const fits = Math.floor(Math.max(0, stock) / Math.max(1, c.quantity));
+      units = units === null ? fits : Math.min(units, fits);
+    }
+    return units;
+  }
+  const stock = p.stock ?? -1;
+  return stock === -1 ? null : Math.max(0, stock);
+}
+
+export function availabilityLevel(
+  p: MenuSourceProduct,
+  stocks?: StockIndex,
+): MenuAvailability {
+  const units = availableUnits(p, stocks);
+  if (units === null) return 'ok';
+  if (units <= 0) return 'out';
+  return units <= LOW_STOCK_THRESHOLD ? 'low' : 'ok';
+}
+
+/** Esgotado = nao da para vender nem uma unidade agora. */
+export function isProductAvailable(
+  p: MenuSourceProduct,
+  stocks?: StockIndex,
+): boolean {
+  return availabilityLevel(p, stocks) !== 'out';
+}
+
+/**
+ * Parte do cardapio que vai ao ar sozinha (sem "Publicar"): disponibilidade,
+ * descricao e foto dos produtos que estao no cardapio agora. Preco e nome
+ * ficam de fora de proposito — esses so mudam publicando.
+ */
+export interface MenuLiveProduct {
+  availability: MenuAvailability;
+  description: string;
+  imageUrl: string | null;
+}
+
+export function buildLiveProducts(input: {
+  products: MenuSourceProduct[];
+  items: MenuSourceItem[];
+  stocks?: StockIndex;
+}): Record<string, MenuLiveProduct> {
+  const itemByProduct = indexMenuItems(input.items);
+  const result: Record<string, MenuLiveProduct> = {};
+  for (const p of input.products) {
+    if (!isProductOnMenu(p, itemByProduct.get(String(p._id)))) continue;
+    result[String(p._id)] = {
+      availability: availabilityLevel(p, input.stocks),
+      description: p.description ?? '',
+      imageUrl: p.imageUrl || null,
+    };
+  }
+  return result;
+}
+
+const byOrderThenName = (
+  a: { order: number; name: string },
+  b: { order: number; name: string },
+) => a.order - b.order || a.name.localeCompare(b.name, 'pt-BR');
+
+export function buildMenuSnapshot(input: {
+  store: MenuSnapshotStore;
+  categories: MenuSourceCategory[];
+  products: MenuSourceProduct[];
+  items: MenuSourceItem[];
+  optionGroups?: MenuSourceOptionGroup[];
+  /** Estoque dos componentes de combos (ver `comboComponentIds`). */
+  stocks?: StockIndex;
+  version: number;
+  publishedAt: Date;
+}): MenuSnapshot {
+  const itemByProduct = indexMenuItems(input.items);
+  const categoryById = new Map(input.categories.map((c) => [String(c._id), c]));
+  const groups = new Map<
+    string,
+    {
+      category: MenuSnapshotCategory;
+      order: number;
+      items: (MenuSnapshotProduct & { order: number })[];
+    }
+  >();
+
+  for (const p of input.products) {
+    const item = itemByProduct.get(String(p._id));
+    if (!isProductOnMenu(p, item)) continue;
+    const source = p.categoryId
+      ? categoryById.get(String(p.categoryId))
+      : undefined;
+    const key = source ? String(source._id) : OTHER_CATEGORY_ID;
+    let group = groups.get(key);
+    if (!group) {
+      group = {
+        category: {
+          id: key,
+          name: source?.name ?? 'Outros',
+          icon: source?.icon ?? null,
+          color: source?.color ?? null,
+          products: [],
+        },
+        order: Number.POSITIVE_INFINITY,
+        items: [],
+      };
+      groups.set(key, group);
+    }
+    const order = item?.order ?? 0;
+    group.order = Math.min(group.order, order);
+    group.items.push({
+      id: String(p._id),
+      name: p.name,
+      description: p.description ?? '',
+      price: menuPrice(p)!.value,
+      imageUrl: p.imageUrl || null,
+      tag: item?.tag?.trim() || null,
+      available: isProductAvailable(p, input.stocks),
+      optionGroups: resolveOptionGroups(item, input.optionGroups),
+      order,
+    });
+  }
+
+  // "Outros" sempre por ultimo; o resto pela menor ordem dos seus produtos.
+  const categories = Array.from(groups.values())
+    .map((g) => ({
+      ...g,
+      name: g.category.name,
+      order: g.category.id === OTHER_CATEGORY_ID ? Infinity : g.order,
+    }))
+    .sort(byOrderThenName)
+    .map((g) => ({
+      ...g.category,
+      products: g.items
+        .sort(byOrderThenName)
+        .map(({ order: _order, ...product }) => product),
+    }));
+
+  return {
+    version: input.version,
+    publishedAt: input.publishedAt.toISOString(),
+    store: input.store,
+    categories,
+  };
+}
+
+/**
+ * Hash do conteudo (sem versao/data) — detecta "alteracoes nao publicadas".
+ * Ignora o que vai ao ar sozinho pelo canal ao vivo (disponibilidade,
+ * descricao e foto): mudar isso nao pede "Publicar".
+ */
+export function snapshotContentHash(
+  snapshot: Pick<MenuSnapshot, 'store' | 'categories'>,
+): string {
+  const categories = snapshot.categories.map((c) => ({
+    ...c,
+    products: c.products.map(
+      ({ available: _a, description: _d, imageUrl: _i, ...rest }) => rest,
+    ),
+  }));
+  return createHash('sha1')
+    .update(JSON.stringify({ store: snapshot.store, categories }))
+    .digest('hex');
+}
