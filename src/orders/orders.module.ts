@@ -2,6 +2,17 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { OrdersController } from './orders.controller';
 import { OrdersService } from './orders.service';
+import { PanelCheckoutService } from './panel-checkout.service';
+import {
+  MenuOnline,
+  MenuOnlineSchema,
+} from '../menu/schemas/menu-online.schema';
+import { PaymentsModule } from '../payments/payments.module';
+import { Business, BusinessSchema } from '../business/schemas/business.schema';
+import {
+  DeliveryQuote,
+  DeliveryQuoteSchema,
+} from '../delivery/schemas/delivery-quote.schema';
 import { Order, OrderSchema } from './schemas/order.schema';
 import {
   OrderCounter,
@@ -24,15 +35,19 @@ import { SalesModule } from '../sales/sales.module';
       { name: Product.name, schema: ProductSchema },
       { name: User.name, schema: UserSchema },
       { name: Customer.name, schema: CustomerSchema },
+      { name: Business.name, schema: BusinessSchema },
+      { name: MenuOnline.name, schema: MenuOnlineSchema },
+      { name: DeliveryQuote.name, schema: DeliveryQuoteSchema },
     ]),
     BusinessModule,
     StockMovementsModule,
     PricingsModule,
     CampaignsModule,
     SalesModule,
+    PaymentsModule,
   ],
   controllers: [OrdersController],
-  providers: [OrdersService],
+  providers: [OrdersService, PanelCheckoutService],
   exports: [OrdersService],
 })
 export class OrdersModule {}

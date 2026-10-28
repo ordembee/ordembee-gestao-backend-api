@@ -1,4 +1,11 @@
-import { Body, Controller, ForbiddenException, Get, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  ForbiddenException,
+  Get,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { StockMovementsService } from './stock-movements.service';
 import { BusinessService } from '../business/business.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -17,12 +24,19 @@ export class StockMovementsController {
   @Roles(Role.OWNER, Role.GERENTE)
   async create(@CurrentUser() user: any, @Body() dto: CreateStockMovementDto) {
     if (user.role === Role.GERENTE) {
-      const perms = await this.businessService.getEffectivePermissions(user.businessId, user.role);
+      const perms = await this.businessService.getEffectivePermissions(
+        user.businessId,
+        user.role,
+      );
       if (!perms.canManageStock) {
         throw new ForbiddenException('Sem permissão para movimentar estoque');
       }
     }
-    return this.stockMovementsService.createManual(user.uid, user.businessId, dto);
+    return this.stockMovementsService.createManual(
+      user.uid,
+      user.businessId,
+      dto,
+    );
   }
 
   @Get()

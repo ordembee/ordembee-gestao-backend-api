@@ -1,4 +1,12 @@
-import { IsString, IsNumber, IsEnum, IsOptional, IsDateString, IsBoolean, Min } from 'class-validator';
+import {
+  IsString,
+  IsNumber,
+  IsEnum,
+  IsOptional,
+  IsDateString,
+  IsBoolean,
+  Min,
+} from 'class-validator';
 import { ExpenseCategory, ExpenseType } from '../schemas/expense.schema';
 
 export class CreateExpenseDto {

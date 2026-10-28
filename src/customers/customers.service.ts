@@ -187,10 +187,18 @@ export class CustomersService {
     businessId: string,
     dto: UpdateCustomerDto,
   ): Promise<CustomerDocument> {
+    const filter = { _id: id, businessId: new Types.ObjectId(businessId) };
+    // Endereco editado a mao: o endereco campo a campo (do cardapio) deixa de valer.
+    const current =
+      dto.address !== undefined
+        ? await this.customerModel.findOne(filter).select('address').lean()
+        : null;
+    const addressChanged =
+      !!current && (current.address ?? '').trim() !== dto.address!.trim();
     const customer = await this.customerModel
       .findOneAndUpdate(
-        { _id: id, businessId: new Types.ObjectId(businessId) },
-        dto,
+        filter,
+        addressChanged ? { ...dto, $unset: { addressDetails: 1 } } : dto,
         { new: true },
       )
       .exec();
@@ -385,7 +393,16 @@ export class CustomersService {
         .aggregate<{
           count: number;
           total: number;
-        }>([{ $match: { businessId, customerId, status: SaleStatus.CONCLUIDA } }, { $group: { _id: null, count: { $sum: 1 }, total: { $sum: '$total' } } }])
+        }>([
+          { $match: { businessId, customerId, status: SaleStatus.CONCLUIDA } },
+          {
+            $group: {
+              _id: null,
+              count: { $sum: 1 },
+              total: { $sum: '$total' },
+            },
+          },
+        ])
         .exec(),
       // Encomendas ainda em andamento (ainda nao viraram venda).
       this.orderModel

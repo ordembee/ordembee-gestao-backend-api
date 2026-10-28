@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document, Types } from 'mongoose';
+import { Document } from 'mongoose';
 
 export type BusinessDocument = Business & Document;
 
@@ -53,139 +53,138 @@ export const DEFAULT_PERMISSIONS: BusinessPermissions = {
   },
 };
 
-/** Horario por dia da semana ('0' = domingo ... '6' = sabado). `null` = fechado no dia.
- * Fechamento menor que a abertura = turno que passa da meia-noite. */
-export type MenuOpeningHours = Record<string, [string, string] | null>;
-
-/** Produto no cardapio: exibir, selo e ordem sao do cardapio (o preco segue no produto). */
+/** Recebedor do Pix "copia e cola" estatico da loja (ex.: entrega Uber paga antes no cardapio). */
 @Schema({ _id: false })
-export class MenuItem {
-  @Prop({ type: Types.ObjectId, ref: 'Product', required: true })
-  productId: Types.ObjectId;
-
-  @Prop({ default: false })
-  active: boolean;
-
-  /** Selo curto exibido no card ("Vegano", "Mais pedido"). */
-  @Prop()
-  tag?: string;
-
-  /** Ordem de exibicao (menor primeiro; empate = nome). */
-  @Prop({ default: 0 })
-  order: number;
-
-  /** Grupos de complementos oferecidos neste produto, na ordem de exibicao. */
-  @Prop({ type: [Types.ObjectId], default: [] })
-  optionGroupIds?: Types.ObjectId[];
-}
-
-/** Uma escolha dentro de um grupo de complementos ("Coca 350ml", "+ R$ 7,90"). */
-@Schema()
-export class MenuOption {
-  _id?: Types.ObjectId;
+export class PixSettings {
+  @Prop({ required: true })
+  key: string;
 
   @Prop({ required: true })
-  name: string;
+  merchantName: string;
 
-  /** Valor somado ao item (0 = sem custo, ex.: "Não preciso, obrigado"). */
-  @Prop({ min: 0, default: 0 })
-  price: number;
-
-  @Prop({ default: true })
-  active: boolean;
+  @Prop({ required: true })
+  merchantCity: string;
 }
 
 /**
- * Grupo de complementos reutilizavel entre produtos ("Bebidas", "Descartaveis").
- * min > 0 = obrigatorio; max = quantas opcoes o cliente pode marcar.
+ * Checkout da InfinitePay: o cliente paga (Pix ou cartao) num link da loja e a
+ * confirmacao volta por webhook. Nao ha segredo — so a InfiniteTag (`handle`).
  */
-@Schema()
-export class MenuOptionGroup {
-  _id?: Types.ObjectId;
-
-  @Prop({ required: true })
-  name: string;
-
-  @Prop({ min: 0, default: 0 })
-  min: number;
-
-  @Prop({ min: 1, default: 1 })
-  max: number;
-
-  @Prop({ default: true })
-  active: boolean;
-
-  @Prop({ type: [SchemaFactory.createForClass(MenuOption)], default: [] })
-  options: MenuOption[];
-}
-
-/** Configuracao do cardapio digital publico (ver modulo menu/). */
 @Schema({ _id: false })
-export class MenuSettings {
-  /** Identificador publico na URL do cardapio — unico entre negocios. */
-  @Prop()
-  slug?: string;
+export class InfinitePaySettings {
+  /** InfiniteTag da loja, sem o `$`. */
+  @Prop({ required: true })
+  handle: string;
 
   @Prop({ default: false })
   enabled: boolean;
+}
+
+/** Endereco de coleta da Uber (estruturado — o endereco do cardapio e texto livre). */
+@Schema({ _id: false })
+export class UberPickupAddress {
+  @Prop({ required: true })
+  cep: string;
+
+  @Prop({ required: true })
+  street: string;
+
+  @Prop({ required: true })
+  number: string;
+
+  @Prop({ required: true })
+  district: string;
+
+  @Prop({ required: true })
+  city: string;
+
+  @Prop({ required: true })
+  state: string;
 
   @Prop()
-  description?: string;
+  complement?: string;
+}
+
+/**
+ * Conta Uber Direct da loja. `clientSecret` e `webhookSigningKey` ficam
+ * CIFRADOS (common/crypto/secret-box) — nunca saem da API em texto.
+ */
+@Schema({ _id: false })
+export class UberDirectSettings {
+  @Prop()
+  customerId?: string;
 
   @Prop()
-  coverUrl?: string;
+  clientId?: string;
 
   @Prop()
-  address?: string;
+  clientSecretEnc?: string;
 
-  /** So digitos, com DDD. */
+  /** Ultimos 4 caracteres, so para a tela mostrar que existe. */
   @Prop()
-  whatsapp?: string;
-
-  @Prop({ min: 0, default: 0 })
-  deliveryFee: number;
-
-  /** A loja entrega? false = so retirada no local. Ausente = entrega (padrao antigo). */
-  @Prop({ default: true })
-  deliveryEnabled: boolean;
-
-  @Prop({ default: true })
-  pickupEnabled: boolean;
-
-  @Prop({ type: Object, default: () => ({}) })
-  openingHours: MenuOpeningHours;
+  clientSecretHint?: string;
 
   @Prop()
-  lastPublishedAt?: Date;
+  webhookSigningKeyEnc?: string;
 
-  @Prop({ default: 0 })
-  publishedVersion: number;
-
-  /** Slug do arquivo publicado — se o slug mudar, o arquivo antigo e apagado. */
   @Prop()
-  publishedSlug?: string;
+  webhookSigningKeyHint?: string;
 
-  /** Hash do conteudo publicado — base do aviso "alteracoes nao publicadas". */
+  /** Conta de testes: a entrega usa o "robo courier" da Uber. */
+  @Prop({ default: false })
+  sandbox: boolean;
+
+  @Prop({ type: SchemaFactory.createForClass(UberPickupAddress) })
+  pickupAddress?: UberPickupAddress;
+
+  /** Telefone de quem entrega o pacote ao entregador (E.164). */
   @Prop()
-  publishedHash?: string;
+  pickupPhone?: string;
 
-  @Prop({ type: [MenuItem], default: [] })
-  items: MenuItem[];
-
-  @Prop({ type: [SchemaFactory.createForClass(MenuOptionGroup)], default: [] })
-  optionGroups?: MenuOptionGroup[];
-
-  /** Cor da marca no cardapio (#RRGGBB). Ausente = cor padrao do cardapio. */
+  /** Instrucoes ao entregador na coleta ("balcao dos fundos"). */
   @Prop()
-  themeColor?: string;
+  pickupNotes?: string;
+}
 
-  /** @usuario, exibido em "Mais informações". */
+/**
+ * Integracoes e configuracoes da loja com parceiros (Uber, Pix, ...). Cada
+ * parceiro novo ganha a sua chave aqui — nunca solta na raiz do Business.
+ */
+@Schema({ _id: false })
+export class BusinessConfig {
+  @Prop({ type: SchemaFactory.createForClass(UberDirectSettings) })
+  uber?: UberDirectSettings;
+
+  @Prop({ type: SchemaFactory.createForClass(PixSettings) })
+  pix?: PixSettings;
+
+  @Prop({ type: SchemaFactory.createForClass(InfinitePaySettings) })
+  infinitepay?: InfinitePaySettings;
+}
+
+/** Endereco da loja (dados cadastrais; o de coleta da Uber e o do cardapio ficam nas suas telas). */
+@Schema({ _id: false })
+export class BusinessAddress {
+  @Prop({ required: true })
+  cep: string;
+
+  @Prop({ required: true })
+  street: string;
+
+  @Prop({ required: true })
+  number: string;
+
+  @Prop({ required: true })
+  district: string;
+
+  @Prop({ required: true })
+  city: string;
+
+  @Prop({ required: true })
+  state: string;
+
   @Prop()
-  instagram?: string;
-
-  /** Formas de pagamento aceitas no cardapio (PaymentMethod). Vazio/ausente = todas. */
-  @Prop({ type: [String] })
-  acceptedPayments?: string[];
+  complement?: string;
 }
 
 @Schema({ timestamps: true })
@@ -198,6 +197,20 @@ export class Business {
 
   @Prop()
   businessType: string;
+
+  /** CPF ou CNPJ, so digitos. */
+  @Prop()
+  document?: string;
+
+  /** Telefone/WhatsApp da loja (como digitado, com mascara). */
+  @Prop()
+  phone?: string;
+
+  @Prop()
+  email?: string;
+
+  @Prop({ type: SchemaFactory.createForClass(BusinessAddress) })
+  address?: BusinessAddress;
 
   @Prop()
   city: string;
@@ -215,16 +228,8 @@ export class Business {
   @Prop({ type: Object, default: () => DEFAULT_PERMISSIONS })
   permissions: BusinessPermissions;
 
-  @Prop({ type: MenuSettings })
-  menu?: MenuSettings;
+  @Prop({ type: SchemaFactory.createForClass(BusinessConfig) })
+  config?: BusinessConfig;
 }
 
 export const BusinessSchema = SchemaFactory.createForClass(Business);
-
-BusinessSchema.index(
-  { 'menu.slug': 1 },
-  {
-    unique: true,
-    partialFilterExpression: { 'menu.slug': { $type: 'string' } },
-  },
-);

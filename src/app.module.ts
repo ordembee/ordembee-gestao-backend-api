@@ -18,6 +18,8 @@ import { PricingsModule } from './pricings/pricings.module';
 import { CampaignsModule } from './campaigns/campaigns.module';
 import { OrdersModule } from './orders/orders.module';
 import { MenuModule } from './menu/menu.module';
+import { DeliveryModule } from './delivery/delivery.module';
+import { PaymentsModule } from './payments/payments.module';
 import { FirebaseAuthGuard } from './common/guards/firebase-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 
@@ -47,6 +49,8 @@ import { RolesGuard } from './common/guards/roles.guard';
     CampaignsModule,
     OrdersModule,
     MenuModule,
+    DeliveryModule,
+    PaymentsModule,
   ],
   providers: [
     {

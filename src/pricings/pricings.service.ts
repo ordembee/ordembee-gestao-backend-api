@@ -1,7 +1,11 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { Pricing, PricingDocument, PricingItem } from './schemas/pricing.schema';
+import {
+  Pricing,
+  PricingDocument,
+  PricingItem,
+} from './schemas/pricing.schema';
 import { CreatePricingDto, PricingItemDto } from './dto/create-pricing.dto';
 import { UpdatePricingDto } from './dto/update-pricing.dto';
 import { IngredientsService } from '../ingredients/ingredients.service';
@@ -23,7 +27,10 @@ export class PricingsService {
     private readonly ingredientsService: IngredientsService,
   ) {}
 
-  async create(businessId: string, dto: CreatePricingDto): Promise<ResolvedPricing> {
+  async create(
+    businessId: string,
+    dto: CreatePricingDto,
+  ): Promise<ResolvedPricing> {
     const bizObj = new Types.ObjectId(businessId);
     await this.ingredientsService.assertIngredientsExist(
       bizObj,

@@ -32,15 +32,23 @@ export class UsersService {
       .exec();
   }
 
-  async inviteUser(businessId: string, dto: InviteUserDto): Promise<UserDocument> {
+  async inviteUser(
+    businessId: string,
+    dto: InviteUserDto,
+  ): Promise<UserDocument> {
     const normalizedEmail = dto.email.toLowerCase();
 
     const existing = await this.userModel
-      .findOne({ email: normalizedEmail, businessId: new Types.ObjectId(businessId) })
+      .findOne({
+        email: normalizedEmail,
+        businessId: new Types.ObjectId(businessId),
+      })
       .exec();
 
     if (existing) {
-      throw new ConflictException('Já existe um usuário com esse e-mail neste negócio');
+      throw new ConflictException(
+        'Já existe um usuário com esse e-mail neste negócio',
+      );
     }
 
     const user = await this.userModel.create({
@@ -71,7 +79,9 @@ export class UsersService {
     if (!target) throw new NotFoundException('Usuário não encontrado');
 
     if (target.role === Role.OWNER) {
-      throw new ForbiddenException('Não é possível alterar o perfil do dono do negócio');
+      throw new ForbiddenException(
+        'Não é possível alterar o perfil do dono do negócio',
+      );
     }
 
     const updated = await this.userModel
@@ -92,10 +102,7 @@ export class UsersService {
     return updated!;
   }
 
-  async removeUser(
-    businessId: string,
-    userId: string,
-  ): Promise<void> {
+  async removeUser(businessId: string, userId: string): Promise<void> {
     const target = await this.userModel
       .findOne({ _id: userId, businessId: new Types.ObjectId(businessId) })
       .exec();
@@ -135,7 +142,10 @@ export class UsersService {
     return updated!;
   }
 
-  async reactivateUser(businessId: string, userId: string): Promise<UserDocument> {
+  async reactivateUser(
+    businessId: string,
+    userId: string,
+  ): Promise<UserDocument> {
     const target = await this.userModel
       .findOne({ _id: userId, businessId: new Types.ObjectId(businessId) })
       .exec();

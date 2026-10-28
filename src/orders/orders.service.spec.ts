@@ -1,6 +1,10 @@
 import { BadRequestException } from '@nestjs/common';
 import { Types } from 'mongoose';
-import { MENU_ORDER_LATE_GRACE_MS, OrdersService, lateOrdersFilter } from './orders.service';
+import {
+  MENU_ORDER_LATE_GRACE_MS,
+  OrdersService,
+  lateOrdersFilter,
+} from './orders.service';
 import { OrderSource, OrderStatus } from './schemas/order.schema';
 import { PaymentMethod } from '../common/enums/payment-method.enum';
 
@@ -16,18 +20,27 @@ function buildService(overrides: Partial<Record<string, any>> = {}) {
     overrides.productModel ?? ({} as any),
     overrides.userModel ?? ({} as any),
     overrides.customerModel ?? ({} as any),
-    overrides.stockMovementsService ?? ({ recordSaleMovement: jest.fn() } as any),
-    overrides.pricingsService ?? ({ findManyByIds: jest.fn().mockResolvedValue([]) } as any),
-    overrides.campaignsService ?? ({
-        prepareForDocument: jest
-          .fn()
-          .mockResolvedValue({ tags: [], discount: null, added: [], removed: [], existing: [] }),
+    overrides.stockMovementsService ??
+      ({ recordSaleMovement: jest.fn() } as any),
+    overrides.pricingsService ??
+      ({ findManyByIds: jest.fn().mockResolvedValue([]) } as any),
+    overrides.campaignsService ??
+      ({
+        prepareForDocument: jest.fn().mockResolvedValue({
+          tags: [],
+          discount: null,
+          added: [],
+          removed: [],
+          existing: [],
+        }),
         commitUsage: jest.fn().mockResolvedValue(undefined),
         releaseUsage: jest.fn().mockResolvedValue(undefined),
       } as any),
     overrides.salesService ?? ({} as any),
     overrides.businessService ??
-      ({ getTimezone: jest.fn().mockResolvedValue('America/Sao_Paulo') } as any),
+      ({
+        getTimezone: jest.fn().mockResolvedValue('America/Sao_Paulo'),
+      } as any),
   );
 }
 
@@ -61,12 +74,19 @@ describe('OrdersService — estoque', () => {
     const comboId = new Types.ObjectId();
 
     const delta = (service as any).buildStockDelta([
-      { productId: bolo, productName: 'Bolo', quantity: 2, comboComponents: [] },
+      {
+        productId: bolo,
+        productName: 'Bolo',
+        quantity: 2,
+        comboComponents: [],
+      },
       {
         productId: comboId,
         productName: 'Combo',
         quantity: 1,
-        comboComponents: [{ productId: bolo, productName: 'Bolo', quantity: 3 }],
+        comboComponents: [
+          { productId: bolo, productName: 'Bolo', quantity: 3 },
+        ],
       },
     ]);
 
@@ -79,11 +99,26 @@ describe('OrdersService — estoque', () => {
     const torta = new Types.ObjectId();
 
     const previous = (service as any).buildStockDelta([
-      { productId: bolo, productName: 'Bolo', quantity: 3, comboComponents: [] },
-      { productId: torta, productName: 'Torta', quantity: 1, comboComponents: [] },
+      {
+        productId: bolo,
+        productName: 'Bolo',
+        quantity: 3,
+        comboComponents: [],
+      },
+      {
+        productId: torta,
+        productName: 'Torta',
+        quantity: 1,
+        comboComponents: [],
+      },
     ]);
     const next = (service as any).buildStockDelta([
-      { productId: bolo, productName: 'Bolo', quantity: 5, comboComponents: [] },
+      {
+        productId: bolo,
+        productName: 'Bolo',
+        quantity: 5,
+        comboComponents: [],
+      },
     ]);
 
     const diff = (service as any).diffStockDelta(next, previous);
@@ -98,7 +133,12 @@ describe('OrdersService — estoque', () => {
     const bolo = new Types.ObjectId();
 
     const same = [
-      { productId: bolo, productName: 'Bolo', quantity: 2, comboComponents: [] },
+      {
+        productId: bolo,
+        productName: 'Bolo',
+        quantity: 2,
+        comboComponents: [],
+      },
     ];
     const diff = (service as any).diffStockDelta(
       (service as any).buildStockDelta(same),
@@ -191,9 +231,10 @@ describe('OrdersService.deliver', () => {
       },
       userModel: {
         findOne: jest.fn(() => ({
-          exec: jest
-            .fn()
-            .mockResolvedValue({ _id: new Types.ObjectId(), displayName: 'Op' }),
+          exec: jest.fn().mockResolvedValue({
+            _id: new Types.ObjectId(),
+            displayName: 'Op',
+          }),
         })),
       },
       salesService: { createFromOrder },
@@ -214,7 +255,9 @@ describe('OrdersService.deliver', () => {
     });
 
     const payload = createFromOrder.mock.calls[0][0];
-    expect(payload.payments).toEqual([{ method: PaymentMethod.PIX, amount: 100 }]);
+    expect(payload.payments).toEqual([
+      { method: PaymentMethod.PIX, amount: 100 },
+    ]);
     expect(payload.tags).toEqual(['NATAL2025']);
     expect(order.status).toBe(OrderStatus.ENTREGUE);
     expect(order.deliveredAt).toBeInstanceOf(Date);
@@ -291,22 +334,42 @@ describe('OrdersService.buildDeliveryAt', () => {
 describe('OrdersService — feed de pedidos do cardápio', () => {
   function feedService(orders: any[] = []) {
     const find = jest.fn(() => ({
-      sort: () => ({ limit: () => ({ select: () => ({ lean: () => ({ exec: () => Promise.resolve(orders) }) }) }) }),
+      sort: () => ({
+        limit: () => ({
+          select: () => ({
+            lean: () => ({ exec: () => Promise.resolve(orders) }),
+          }),
+        }),
+      }),
     }));
     return { service: buildService({ orderModel: { find } }), find };
   }
 
   it('só busca pedidos do cardápio depois de `since`', async () => {
     const { service, find } = feedService([
-      { _id: new Types.ObjectId(), code: 7, customerName: 'Ana', total: 20, fulfillment: 'ENTREGA', createdAt: new Date() },
+      {
+        _id: new Types.ObjectId(),
+        code: 7,
+        customerName: 'Ana',
+        total: 20,
+        fulfillment: 'ENTREGA',
+        createdAt: new Date(),
+      },
     ]);
     const since = new Date(Date.now() - 60_000).toISOString();
-    const result = await service.getMenuFeed(new Types.ObjectId().toString(), since);
+    const result = await service.getMenuFeed(
+      new Types.ObjectId().toString(),
+      since,
+    );
 
     const filter = (find.mock.calls[0] as any[])[0];
     expect(filter.source).toBe('CARDAPIO');
     expect(filter.createdAt.$gt.toISOString()).toBe(since);
-    expect(result.orders[0]).toMatchObject({ code: 7, customerName: 'Ana', total: 20 });
+    expect(result.orders[0]).toMatchObject({
+      code: 7,
+      customerName: 'Ana',
+      total: 20,
+    });
     expect(typeof result.serverTime).toBe('string');
   });
 
@@ -315,7 +378,9 @@ describe('OrdersService — feed de pedidos do cardápio', () => {
       const { service, find } = feedService();
       await service.getMenuFeed(new Types.ObjectId().toString(), since);
       const from: Date = (find.mock.calls[0] as any[])[0].createdAt.$gt;
-      expect(Date.now() - from.getTime()).toBeLessThanOrEqual(24 * 60 * 60 * 1000 + 1000);
+      expect(Date.now() - from.getTime()).toBeLessThanOrEqual(
+        24 * 60 * 60 * 1000 + 1000,
+      );
       expect(Date.now() - from.getTime()).toBeGreaterThan(23 * 60 * 60 * 1000);
     }
   });
@@ -325,11 +390,20 @@ describe('lateOrdersFilter', () => {
   it('dá folga ao pedido do cardápio e mantém a hora exata para os demais', () => {
     const now = new Date('2026-10-20T22:00:00Z');
     const filter = lateOrdersFilter(now) as any;
-    expect(filter.status.$in).toEqual([OrderStatus.PENDENTE, OrderStatus.EM_PRODUCAO, OrderStatus.PRONTO]);
+    expect(filter.status.$in).toEqual([
+      OrderStatus.PENDENTE,
+      OrderStatus.EM_PRODUCAO,
+      OrderStatus.PRONTO,
+    ]);
     const [interno, cardapio] = filter.$or;
-    expect(interno).toEqual({ source: { $ne: OrderSource.CARDAPIO }, deliveryAt: { $lt: now } });
+    expect(interno).toEqual({
+      source: { $ne: OrderSource.CARDAPIO },
+      deliveryAt: { $lt: now },
+    });
     expect(cardapio.source).toBe(OrderSource.CARDAPIO);
-    expect(now.getTime() - cardapio.deliveryAt.$lt.getTime()).toBe(MENU_ORDER_LATE_GRACE_MS);
+    expect(now.getTime() - cardapio.deliveryAt.$lt.getTime()).toBe(
+      MENU_ORDER_LATE_GRACE_MS,
+    );
   });
 });
 
@@ -338,7 +412,12 @@ describe('OrdersService.reserveStock (cardápio)', () => {
   const torta = new Types.ObjectId();
   const businessId = new Types.ObjectId().toString();
   const delta = (entries: [Types.ObjectId, number][]) =>
-    new Map(entries.map(([id, quantity]) => [String(id), { productId: id, productName: String(id), quantity }]));
+    new Map(
+      entries.map(([id, quantity]) => [
+        String(id),
+        { productId: id, productName: String(id), quantity },
+      ]),
+    );
 
   function modelWith(stocks: Record<string, number>) {
     const state = { ...stocks };
@@ -366,7 +445,9 @@ describe('OrdersService.reserveStock (cardápio)', () => {
         }),
       })),
       bulkWrite: jest.fn(async (ops: any[]) => {
-        for (const op of ops) state[String(op.updateOne.filter._id)] += op.updateOne.update.$inc.stock;
+        for (const op of ops)
+          state[String(op.updateOne.filter._id)] +=
+            op.updateOne.update.$inc.stock;
       }),
     };
   }
@@ -374,16 +455,29 @@ describe('OrdersService.reserveStock (cardápio)', () => {
   it('baixa só quando há a quantidade inteira e devolve o histórico real', async () => {
     const productModel = modelWith({ [String(doce)]: 2 });
     const service = buildService({ productModel });
-    const reserved = await (service as any).reserveStock(businessId, delta([[doce, 2]]));
+    const reserved = await (service as any).reserveStock(
+      businessId,
+      delta([[doce, 2]]),
+    );
     expect(productModel.state[String(doce)]).toBe(0);
-    expect(reserved[0]).toMatchObject({ quantity: 2, previousStock: 2, newStock: 0 });
+    expect(reserved[0]).toMatchObject({
+      quantity: 2,
+      previousStock: 2,
+      newStock: 0,
+    });
   });
 
   it('sem estoque suficiente recusa e desfaz o que já tinha baixado', async () => {
     const productModel = modelWith({ [String(doce)]: 5, [String(torta)]: 1 });
     const service = buildService({ productModel });
     await expect(
-      (service as any).reserveStock(businessId, delta([[doce, 2], [torta, 3]])),
+      (service as any).reserveStock(
+        businessId,
+        delta([
+          [doce, 2],
+          [torta, 3],
+        ]),
+      ),
     ).rejects.toMatchObject({ response: { reason: 'INSUFFICIENT_STOCK' } });
     expect(productModel.state[String(doce)]).toBe(5);
     expect(productModel.state[String(torta)]).toBe(1);
@@ -392,7 +486,57 @@ describe('OrdersService.reserveStock (cardápio)', () => {
   it('ignora produto sem controle de estoque (-1)', async () => {
     const productModel = modelWith({ [String(doce)]: -1 });
     const service = buildService({ productModel });
-    await expect((service as any).reserveStock(businessId, delta([[doce, 99]]))).resolves.toEqual([]);
+    await expect(
+      (service as any).reserveStock(businessId, delta([[doce, 99]])),
+    ).resolves.toEqual([]);
     expect(productModel.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+});
+
+describe('OrdersService — pagamento online pendente (InfinitePay)', () => {
+  const pending = () => ({
+    _id: new Types.ObjectId(),
+    status: OrderStatus.PENDENTE,
+    total: 45,
+    payments: [],
+    infinitePay: { orderNsu: 'ref-1' },
+  });
+  const withOrder = (order: any) =>
+    buildService({
+      orderModel: { findOne: jest.fn(() => ({ exec: async () => order })) },
+    });
+
+  it('não deixa registrar pagamento à mão enquanto a InfinitePay não confirmou', async () => {
+    const service = withOrder(pending());
+    await expect(
+      service.addPayment('id', new Types.ObjectId().toString(), 'uid', {
+        method: PaymentMethod.PIX,
+        amount: 45,
+      } as any),
+    ).rejects.toThrow('InfinitePay');
+  });
+
+  it('entregar sem pagamento confirmado também é recusado (não vira fiado)', async () => {
+    const service = withOrder(pending());
+    await expect(
+      (service as any).deliverWith(
+        pending(),
+        new Types.ObjectId().toString(),
+        {},
+        { payments: [] },
+      ),
+    ).rejects.toThrow('só pode ser entregue');
+  });
+
+  it('nem pelo acerto da entrega', async () => {
+    const service = withOrder(pending());
+    await expect(
+      (service as any).deliverWith(
+        pending(),
+        new Types.ObjectId().toString(),
+        {},
+        { payments: [{ method: PaymentMethod.PIX, amount: 45 }] },
+      ),
+    ).rejects.toThrow('InfinitePay');
   });
 });

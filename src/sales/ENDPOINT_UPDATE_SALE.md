@@ -1,20 +1,24 @@
 # Endpoint PATCH /sales/:id - Editar Venda Completa
 
 ## Descrição
+
 Edita uma venda completa com validações no servidor. Permite atualizar data, canal de venda, itens (produtos, quantidades, preços) e formas de pagamento.
 
 ## Rota
+
 ```
 PATCH /sales/:id
 ```
 
 ## Autorização
+
 - **Role obrigatória:** `OWNER`
 - Apenas proprietários podem editar vendas completas
 
 ## Request Body (UpdateSaleDto)
 
 ### Campos Opcionais (pelo menos um deve ser fornecido)
+
 ```typescript
 {
   createdAt?: string;          // ISO 8601 format (ex: "2026-08-19T14:30:00Z")
@@ -35,33 +39,39 @@ PATCH /sales/:id
 ## Validações Realizadas no Servidor
 
 ### 1. Validações de Negócio
+
 - ✅ Venda deve existir e pertencer ao negócio do usuário
 - ✅ **Bloqueio:** Não é possível editar vendas com status `CANCELADA`
 - ✅ `createdAt` não pode ser uma data futura
 - ✅ `createdAt` deve ser uma data válida (ISO 8601)
 
 ### 2. Cálculos Automáticos
+
 - ✅ **Subtotal de cada item:** `unitPrice × quantity`
 - ✅ **Total da venda:** `sum(itens.subtotal)`
 - ✅ **Lucro total:** calculado com base em preços de custo
 
 ### 3. Validação de Pagamentos
+
 - ✅ **Obrigatorio:** `sum(payments.amount) === total da venda`
 - ✅ Erro 400 se houver divergência (com valor esperado no mensagem)
 - ✅ Se apenas itens são atualizados: pagamentos existentes devem corresponder ao novo total
 - ✅ Se pagamentos não são fornecidos mas itens mudaram de valor: erro descritivo
 
 ### 4. Movimentação de Estoque
+
 - ✅ Se quantidade de item mudar: gera `StockMovement` tipo `AJUSTE`
 - ✅ Registro: `Ajuste venda #<id> (<qty_antiga> → <qty_nova>)`
 - ✅ Quantidade ajustada: `|qty_nova - qty_antiga|`
 - ✅ Estoque nunca vai abaixo de 0
 
 ### 5. Auditoria
+
 - ✅ Registra quem editou (userId do usuário autenticado)
 - ✅ Registra quando editou (updatedAt do documento)
 
 ## Response (200 OK)
+
 Retorna o objeto `Sale` completo atualizado:
 
 ```typescript
@@ -190,7 +200,8 @@ Content-Type: application/json
 }
 ```
 
-**Resultado:** 
+**Resultado:**
+
 ```json
 {
   "statusCode": 400,
@@ -206,6 +217,7 @@ PATCH /sales/507f1f77bcf86cd799439011
 ```
 
 **Resultado:**
+
 ```json
 {
   "statusCode": 400,
@@ -216,24 +228,24 @@ PATCH /sales/507f1f77bcf86cd799439011
 
 ## Erros Possíveis
 
-| Status | Mensagem | Causa |
-|--------|----------|-------|
-| 400 | Não é possível editar uma venda cancelada | Venda com status CANCELADA |
-| 400 | A data da venda não pode ser no futuro | createdAt é futuro |
-| 400 | Data inválida | createdAt formato inválido |
-| 400 | Um ou mais produtos não foram encontrados | Produto não existe |
-| 400 | A soma dos pagamentos deve ser igual ao total... | Pagamentos não correspondem ao total |
-| 404 | Venda não encontrada | Venda não existe ou pertence a outro negócio |
-| 403 | Forbidden | Usuário não tem role OWNER |
+| Status | Mensagem                                         | Causa                                        |
+| ------ | ------------------------------------------------ | -------------------------------------------- |
+| 400    | Não é possível editar uma venda cancelada        | Venda com status CANCELADA                   |
+| 400    | A data da venda não pode ser no futuro           | createdAt é futuro                           |
+| 400    | Data inválida                                    | createdAt formato inválido                   |
+| 400    | Um ou mais produtos não foram encontrados        | Produto não existe                           |
+| 400    | A soma dos pagamentos deve ser igual ao total... | Pagamentos não correspondem ao total         |
+| 404    | Venda não encontrada                             | Venda não existe ou pertence a outro negócio |
+| 403    | Forbidden                                        | Usuário não tem role OWNER                   |
 
 ## Diferenças vs. Endpoints Existentes
 
-| Endpoint | Função | Restrição |
-|----------|--------|-----------|
-| `@Patch(':id')` | **Editar completo** | Nenhuma (itens, pagamentos, data) |
-| `@Patch(':id/payments')` | Editar só pagamentos | Apenas pagamentos |
-| `@Patch(':id/cancel')` | Cancelar venda | Apenas cancela, restaura estoque |
-| `@Patch(':id/settle-debt')` | Quitar dívida | Apenas marca como quitada |
+| Endpoint                    | Função               | Restrição                         |
+| --------------------------- | -------------------- | --------------------------------- |
+| `@Patch(':id')`             | **Editar completo**  | Nenhuma (itens, pagamentos, data) |
+| `@Patch(':id/payments')`    | Editar só pagamentos | Apenas pagamentos                 |
+| `@Patch(':id/cancel')`      | Cancelar venda       | Apenas cancela, restaura estoque  |
+| `@Patch(':id/settle-debt')` | Quitar dívida        | Apenas marca como quitada         |
 
 ## StockMovements Gerados
 
@@ -253,6 +265,7 @@ Quando quantidade muda:
 ```
 
 Exemplo: Se quantidade vai de 2 para 5 (+ 3 itens):
+
 - StockMovement registra quantity = 3
 - Estoque decrementado de 3 unidades
 
@@ -261,16 +274,12 @@ Exemplo: Se quantidade vai de 2 para 5 (+ 3 itens):
 ```typescript
 async function updateSale(saleId: string, updateData: UpdateSaleDto) {
   try {
-    const response = await axios.patch(
-      `/sales/${saleId}`,
-      updateData,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-      }
-    );
+    const response = await axios.patch(`/sales/${saleId}`, updateData, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+    });
     return response.data; // Sale atualizada
   } catch (error) {
     if (error.response?.status === 400) {
@@ -283,11 +292,9 @@ async function updateSale(saleId: string, updateData: UpdateSaleDto) {
 // Uso
 const updatedSale = await updateSale('507f1f77bcf86cd799439011', {
   items: [
-    { productId: '507f1f77bcf86cd799439012', unitPrice: 25.90, quantity: 3 }
+    { productId: '507f1f77bcf86cd799439012', unitPrice: 25.9, quantity: 3 },
   ],
-  payments: [
-    { method: 'DINHEIRO', amount: 77.70 }
-  ],
+  payments: [{ method: 'DINHEIRO', amount: 77.7 }],
 });
 ```
 

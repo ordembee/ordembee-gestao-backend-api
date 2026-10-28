@@ -1,4 +1,4 @@
-import type { MenuOpeningHours } from '../business/schemas/business.schema';
+import type { MenuOpeningHours } from './schemas/menu-online.schema';
 
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];

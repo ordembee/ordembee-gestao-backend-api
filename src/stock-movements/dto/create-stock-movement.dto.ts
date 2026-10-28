@@ -1,4 +1,12 @@
-import { IsEnum, IsInt, IsNotEmpty, IsNumber, IsOptional, IsString, Min } from 'class-validator';
+import {
+  IsEnum,
+  IsInt,
+  IsNotEmpty,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Min,
+} from 'class-validator';
 import { MovementType } from '../schemas/stock-movement.schema';
 
 const MANUAL_TYPES = [

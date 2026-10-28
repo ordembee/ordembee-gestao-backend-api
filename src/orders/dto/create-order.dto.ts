@@ -9,12 +9,14 @@ import {
   IsOptional,
   IsString,
   Matches,
+  MaxLength,
   Min,
   ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { PaymentMethod } from '../../common/enums/payment-method.enum';
 import { OrderFulfillment } from '../schemas/order.schema';
+import { StructuredAddressDto } from '../../delivery/dto/delivery.dto';
 
 export class OrderItemDto {
   @IsMongoId()
@@ -40,6 +42,39 @@ export class OrderPaymentDto {
   @IsNumber()
   @Min(0)
   amount: number;
+}
+
+/** Entrega pela Uber num pedido do painel: a taxa vem da cotacao, nunca do navegador. */
+export class OrderUberDeliveryDto {
+  @IsString()
+  @IsNotEmpty()
+  quoteId: string;
+
+  @ValidateNested()
+  @Type(() => StructuredAddressDto)
+  address: StructuredAddressDto;
+
+  /** Quem recebe (nome e sobrenome). */
+  @IsString()
+  @IsNotEmpty()
+  recipientName: string;
+
+  @IsString()
+  @IsNotEmpty()
+  recipientPhone: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  instructions?: string;
+}
+
+/** Cobranca do pedido pelo link da InfinitePay: sinal (`amount`) ou o total (sem `amount`). */
+export class OrderInfinitePayDto {
+  @IsOptional()
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0.01)
+  amount?: number;
 }
 
 export class CreateOrderDto {
@@ -102,4 +137,16 @@ export class CreateOrderDto {
   @ValidateNested({ each: true })
   @Type(() => OrderPaymentDto)
   payments?: OrderPaymentDto[];
+
+  /** Entrega pela Uber Direct (substitui a taxa e o endereco digitados). */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => OrderUberDeliveryDto)
+  uberDelivery?: OrderUberDeliveryDto;
+
+  /** Paga pelo link da InfinitePay (nao combina com `payments`). */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => OrderInfinitePayDto)
+  infinitePay?: OrderInfinitePayDto;
 }

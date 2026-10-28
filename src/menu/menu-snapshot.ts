@@ -1,5 +1,5 @@
 import { createHash } from 'crypto';
-import type { MenuOpeningHours } from '../business/schemas/business.schema';
+import type { MenuOpeningHours } from './schemas/menu-online.schema';
 
 /**
  * Formato do JSON publicado em `menus/{slug}.json` e lido pelo cardapio e pelo
@@ -27,7 +27,6 @@ export interface MenuSnapshotProduct {
   description: string;
   price: number;
   imageUrl: string | null;
-  tag: string | null;
   available: boolean;
   optionGroups: MenuSnapshotOptionGroup[];
 }
@@ -52,9 +51,17 @@ export interface MenuSnapshotStore {
   deliveryFee: number;
   /** false = a loja nao entrega (so retirada). */
   deliveryEnabled: boolean;
+  /**
+   * Quem entrega: 'PROPRIA' (taxa fixa `deliveryFee`) ou 'UBER' (frete
+   * cotado no checkout e pago antes por Pix).
+   */
+  deliveryProvider: 'PROPRIA' | 'UBER';
   pickupEnabled: boolean;
   openingHours: MenuOpeningHours;
   instagram: string;
+  /** Frase de destaque do negocio (linha pequena + titulo); '' = nao aparece. */
+  highlightLabel: string;
+  highlightTitle: string;
   /** Cor da marca (#RRGGBB) para o cardapio aplicar; null = cor padrao. */
   themeColor: string | null;
   /** PaymentMethod aceitos no cardapio (CARTAO_CREDITO, CARTAO_DEBITO, PIX, DINHEIRO). */
@@ -82,20 +89,24 @@ export interface MenuSourceProduct {
   comboItems?: { productId: unknown; quantity: number }[];
   prices?: {
     caixa?: { value?: number; active?: boolean };
-    deliveryProprio?: { value?: number; active?: boolean };
+    ordemBee?: { value?: number; active?: boolean };
   };
 }
 
-/** Item do cardapio (Business.menu.items) — exibir, selo e ordem sao do cardapio, nao do produto. */
+/** Item do cardapio (MenuOnline.items) — exibir e complementos sao do cardapio, nao do produto. */
 export interface MenuSourceItem {
   productId: unknown;
   active?: boolean;
-  tag?: string;
-  order?: number;
   optionGroupIds?: unknown[];
 }
 
-/** Grupo de complementos como gravado em Business.menu.optionGroups. */
+/** Posicao de uma categoria no cardapio (MenuOnline.categories). */
+export interface MenuSourceCategoryOrder {
+  categoryId: unknown;
+  order?: number;
+}
+
+/** Grupo de complementos como gravado em MenuOnline.optionGroups. */
 export interface MenuSourceOptionGroup {
   _id?: unknown;
   name: string;
@@ -143,7 +154,7 @@ export interface MenuSourceCategory {
 
 /** Projecao usada nas consultas do snapshot e da rota interna de pedidos. */
 export const MENU_PRODUCT_FIELDS =
-  'name description categoryId imageUrl stock isActive isCombo comboItems.productId comboItems.quantity prices.caixa prices.deliveryProprio';
+  'name description categoryId imageUrl stock isActive isCombo comboItems.productId comboItems.quantity prices.caixa prices.ordemBee';
 
 /** productId -> item do cardapio. */
 export function indexMenuItems(
@@ -152,22 +163,23 @@ export function indexMenuItems(
   return new Map((items ?? []).map((i) => [String(i.productId), i]));
 }
 
-const OTHER_CATEGORY_ID = 'outros';
+/** Categoria de quem nao tem categoria (ou tem uma inativa). */
+export const OTHER_CATEGORY_ID = 'outros';
 
-export type MenuPriceSource = 'delivery' | 'caixa';
+export type MenuPriceSource = 'ordembee' | 'caixa';
 
 /**
- * Preco do cardapio = o que ja esta cadastrado no produto: canal Delivery
- * proprio quando ativo e com valor; senao o preco de Caixa. O cardapio nao
+ * Preco do cardapio = o que ja esta cadastrado no produto: canal OrdemBee
+ * quando ativo e com valor; senao o preco de Caixa. O cardapio nao
  * tem preco proprio — para mudar, edita-se o produto.
  */
 export function menuPrice(
   p: MenuSourceProduct,
 ): { value: number; source: MenuPriceSource } | null {
   const round = (v: number) => Math.round(v * 100) / 100;
-  const delivery = p.prices?.deliveryProprio;
-  if (delivery?.active && (delivery.value ?? 0) > 0) {
-    return { value: round(delivery.value!), source: 'delivery' };
+  const ordemBee = p.prices?.ordemBee;
+  if (ordemBee?.active && (ordemBee.value ?? 0) > 0) {
+    return { value: round(ordemBee.value!), source: 'ordembee' };
   }
   const caixa = p.prices?.caixa?.value ?? 0;
   return caixa > 0 ? { value: round(caixa), source: 'caixa' } : null;
@@ -194,7 +206,8 @@ export type MenuAvailability = 'ok' | 'low' | 'out';
 export function comboComponentIds(products: MenuSourceProduct[]): string[] {
   const ids = new Set<string>();
   for (const p of products) {
-    if (p.isCombo) for (const c of p.comboItems ?? []) ids.add(String(c.productId));
+    if (p.isCombo)
+      for (const c of p.comboItems ?? []) ids.add(String(c.productId));
   }
   return [...ids];
 }
@@ -241,43 +254,32 @@ export function isProductAvailable(
   return availabilityLevel(p, stocks) !== 'out';
 }
 
-/**
- * Parte do cardapio que vai ao ar sozinha (sem "Publicar"): disponibilidade,
- * descricao e foto dos produtos que estao no cardapio agora. Preco e nome
- * ficam de fora de proposito — esses so mudam publicando.
- */
-export interface MenuLiveProduct {
-  availability: MenuAvailability;
-  description: string;
-  imageUrl: string | null;
-}
-
-export function buildLiveProducts(input: {
-  products: MenuSourceProduct[];
-  items: MenuSourceItem[];
-  stocks?: StockIndex;
-}): Record<string, MenuLiveProduct> {
-  const itemByProduct = indexMenuItems(input.items);
-  const result: Record<string, MenuLiveProduct> = {};
-  for (const p of input.products) {
-    if (!isProductOnMenu(p, itemByProduct.get(String(p._id)))) continue;
-    result[String(p._id)] = {
-      availability: availabilityLevel(p, input.stocks),
-      description: p.description ?? '',
-      imageUrl: p.imageUrl || null,
-    };
-  }
-  return result;
-}
-
 const byOrderThenName = (
   a: { order: number; name: string },
   b: { order: number; name: string },
 ) => a.order - b.order || a.name.localeCompare(b.name, 'pt-BR');
 
+/**
+ * categoryId -> posicao no cardapio. Categoria sem posicao vai depois das
+ * ordenadas (por nome); "Outros" sempre por ultimo.
+ */
+export function categoryRank(
+  order: MenuSourceCategoryOrder[] | undefined,
+): (categoryId: string) => number {
+  const byId = new Map(
+    (order ?? []).map((c) => [String(c.categoryId), c.order ?? 0]),
+  );
+  return (id) =>
+    id === OTHER_CATEGORY_ID
+      ? Number.POSITIVE_INFINITY
+      : (byId.get(id) ?? Number.MAX_SAFE_INTEGER);
+}
+
 export function buildMenuSnapshot(input: {
   store: MenuSnapshotStore;
   categories: MenuSourceCategory[];
+  /** Ordem das categorias definida no cardapio. */
+  categoryOrder?: MenuSourceCategoryOrder[];
   products: MenuSourceProduct[];
   items: MenuSourceItem[];
   optionGroups?: MenuSourceOptionGroup[];
@@ -288,14 +290,8 @@ export function buildMenuSnapshot(input: {
 }): MenuSnapshot {
   const itemByProduct = indexMenuItems(input.items);
   const categoryById = new Map(input.categories.map((c) => [String(c._id), c]));
-  const groups = new Map<
-    string,
-    {
-      category: MenuSnapshotCategory;
-      order: number;
-      items: (MenuSnapshotProduct & { order: number })[];
-    }
-  >();
+  const rank = categoryRank(input.categoryOrder);
+  const groups = new Map<string, MenuSnapshotCategory>();
 
   for (const p of input.products) {
     const item = itemByProduct.get(String(p._id));
@@ -307,46 +303,34 @@ export function buildMenuSnapshot(input: {
     let group = groups.get(key);
     if (!group) {
       group = {
-        category: {
-          id: key,
-          name: source?.name ?? 'Outros',
-          icon: source?.icon ?? null,
-          color: source?.color ?? null,
-          products: [],
-        },
-        order: Number.POSITIVE_INFINITY,
-        items: [],
+        id: key,
+        name: source?.name ?? 'Outros',
+        icon: source?.icon ?? null,
+        color: source?.color ?? null,
+        products: [],
       };
       groups.set(key, group);
     }
-    const order = item?.order ?? 0;
-    group.order = Math.min(group.order, order);
-    group.items.push({
+    group.products.push({
       id: String(p._id),
       name: p.name,
       description: p.description ?? '',
       price: menuPrice(p)!.value,
       imageUrl: p.imageUrl || null,
-      tag: item?.tag?.trim() || null,
       available: isProductAvailable(p, input.stocks),
       optionGroups: resolveOptionGroups(item, input.optionGroups),
-      order,
     });
   }
 
-  // "Outros" sempre por ultimo; o resto pela menor ordem dos seus produtos.
+  // Categorias na ordem do cardapio; produtos de cada uma por nome.
   const categories = Array.from(groups.values())
-    .map((g) => ({
-      ...g,
-      name: g.category.name,
-      order: g.category.id === OTHER_CATEGORY_ID ? Infinity : g.order,
-    }))
+    .map((c) => ({ ...c, order: rank(c.id) }))
     .sort(byOrderThenName)
-    .map((g) => ({
-      ...g.category,
-      products: g.items
-        .sort(byOrderThenName)
-        .map(({ order: _order, ...product }) => product),
+    .map(({ order: _order, ...c }) => ({
+      ...c,
+      products: c.products.sort((a, b) =>
+        a.name.localeCompare(b.name, 'pt-BR'),
+      ),
     }));
 
   return {
@@ -357,21 +341,16 @@ export function buildMenuSnapshot(input: {
   };
 }
 
-/**
- * Hash do conteudo (sem versao/data) — detecta "alteracoes nao publicadas".
- * Ignora o que vai ao ar sozinho pelo canal ao vivo (disponibilidade,
- * descricao e foto): mudar isso nao pede "Publicar".
- */
+/** Hash do conteudo (sem versao/data) — detecta "alteracoes nao publicadas". */
 export function snapshotContentHash(
   snapshot: Pick<MenuSnapshot, 'store' | 'categories'>,
 ): string {
-  const categories = snapshot.categories.map((c) => ({
-    ...c,
-    products: c.products.map(
-      ({ available: _a, description: _d, imageUrl: _i, ...rest }) => rest,
-    ),
-  }));
   return createHash('sha1')
-    .update(JSON.stringify({ store: snapshot.store, categories }))
+    .update(
+      JSON.stringify({
+        store: snapshot.store,
+        categories: snapshot.categories,
+      }),
+    )
     .digest('hex');
 }

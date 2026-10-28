@@ -30,7 +30,10 @@ export class PricingsController {
     @CurrentUser() user: any,
     @Query('includeInactive') includeInactive?: string,
   ) {
-    return this.pricingsService.findAll(user.businessId, includeInactive === 'true');
+    return this.pricingsService.findAll(
+      user.businessId,
+      includeInactive === 'true',
+    );
   }
 
   @Get(':id')

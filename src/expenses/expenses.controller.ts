@@ -1,4 +1,13 @@
-import { Controller, Get, Post, Patch, Delete, Body, Param, Query } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Delete,
+  Body,
+  Param,
+  Query,
+} from '@nestjs/common';
 import { ExpensesService } from './expenses.service';
 import { CreateExpenseDto, UpdateExpenseDto } from './dto/expense.dto';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -22,7 +31,12 @@ export class ExpensesController {
     @Query('dateTo') dateTo?: string,
     @Query('category') category?: string,
   ) {
-    return this.expensesService.findAll(user.businessId, dateFrom, dateTo, category);
+    return this.expensesService.findAll(
+      user.businessId,
+      dateFrom,
+      dateTo,
+      category,
+    );
   }
 
   @Get('summary')
@@ -45,7 +59,11 @@ export class ExpensesController {
   }
 
   @Patch(':id')
-  update(@CurrentUser() user: any, @Param('id') id: string, @Body() dto: UpdateExpenseDto) {
+  update(
+    @CurrentUser() user: any,
+    @Param('id') id: string,
+    @Body() dto: UpdateExpenseDto,
+  ) {
     return this.expensesService.update(id, user.businessId, dto);
   }
 

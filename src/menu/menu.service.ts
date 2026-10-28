@@ -10,10 +10,14 @@ import { Model, Types } from 'mongoose';
 import {
   Business,
   BusinessDocument,
-  MenuItem,
-  MenuOptionGroup,
-  MenuSettings,
 } from '../business/schemas/business.schema';
+import {
+  DeliveryProvider,
+  MenuItem,
+  MenuOnline,
+  MenuOnlineDocument,
+  MenuOptionGroup,
+} from './schemas/menu-online.schema';
 import { Product, ProductDocument } from '../products/schemas/product.schema';
 import {
   Category,
@@ -24,15 +28,19 @@ import { resolveTimeZone } from '../common/date/timezone.util';
 import { UpdateMenuSettingsDto } from './dto/update-menu-settings.dto';
 import { MENU_PAYMENT_METHODS } from './dto/menu-order.dto';
 import { SaveOptionGroupDto } from './dto/option-group.dto';
-import { ReorderMenuItemsDto, UpdateMenuItemDto } from './dto/menu-items.dto';
+import {
+  ReorderMenuCategoriesDto,
+  UpdateMenuItemDto,
+} from './dto/menu-items.dto';
 import {
   MENU_PRODUCT_FIELDS,
   MenuSnapshot,
   MenuSourceCategory,
   MenuSourceProduct,
+  OTHER_CATEGORY_ID,
   StockIndex,
-  buildLiveProducts,
   buildMenuSnapshot,
+  categoryRank,
   comboComponentIds,
   indexMenuItems,
   isProductAvailable,
@@ -42,15 +50,110 @@ import {
 
 export const menuFilePath = (slug: string) => `menus/${slug}.json`;
 
-const DEFAULT_MENU: MenuSettings = {
-  enabled: false,
-  items: [],
-  deliveryFee: 0,
-  deliveryEnabled: true,
-  pickupEnabled: true,
-  openingHours: {},
-  publishedVersion: 0,
+/** Cardapio do negocio com todos os campos preenchidos (documento pode nem existir ainda). */
+export type ResolvedMenu = Omit<
+  MenuOnline,
+  'businessId' | 'store' | 'labelText' | 'publication'
+> & {
+  store: {
+    acceptedPayments: string[];
+    delivery: {
+      deliveryProvider: DeliveryProvider;
+      deliveryFee: number;
+      deliveryEnabled: boolean;
+      pickupEnabled: boolean;
+    };
+    contact: { address: string; whatsapp: string };
+    socialMedia: { instagram: string };
+    images: { coverUrl: string | null; logoUrl: string | null };
+    colors: { themeColor: string };
+    openingHours: MenuOnline['store']['openingHours'];
+  };
+  labelText: {
+    description: string;
+    highlightLabel: string;
+    highlightTitle: string;
+  };
+  publication: {
+    version: number;
+    lastPublishedAt: Date | null;
+    slug: string | null;
+    hash: string | null;
+  };
 };
+
+/** Preenche o que faltar com os padroes — leitura unica do formato do cardapio. */
+export function resolveMenu(doc: Partial<MenuOnline> | null): ResolvedMenu {
+  const store = doc?.store;
+  const delivery = store?.delivery;
+  return {
+    slug: doc?.slug,
+    enabled: doc?.enabled ?? false,
+    categories: doc?.categories ?? [],
+    items: doc?.items ?? [],
+    optionGroups: doc?.optionGroups ?? [],
+    store: {
+      acceptedPayments: store?.acceptedPayments ?? [],
+      delivery: {
+        deliveryProvider:
+          delivery?.deliveryProvider === DeliveryProvider.UBER
+            ? DeliveryProvider.UBER
+            : DeliveryProvider.PROPRIA,
+        deliveryFee: delivery?.deliveryFee ?? 0,
+        deliveryEnabled: delivery?.deliveryEnabled !== false,
+        pickupEnabled: delivery?.pickupEnabled !== false,
+      },
+      contact: {
+        address: store?.contact?.address ?? '',
+        whatsapp: store?.contact?.whatsapp ?? '',
+      },
+      socialMedia: { instagram: store?.socialMedia?.instagram ?? '' },
+      images: {
+        coverUrl: store?.images?.coverUrl || null,
+        logoUrl: store?.images?.logoUrl || null,
+      },
+      colors: { themeColor: store?.colors?.themeColor ?? '' },
+      openingHours: store?.openingHours ?? {},
+    },
+    labelText: {
+      description: doc?.labelText?.description ?? '',
+      highlightLabel: doc?.labelText?.highlightLabel ?? '',
+      highlightTitle: doc?.labelText?.highlightTitle ?? '',
+    },
+    publication: {
+      version: doc?.publication?.version ?? 0,
+      lastPublishedAt: doc?.publication?.lastPublishedAt ?? null,
+      slug: doc?.publication?.slug ?? null,
+      hash: doc?.publication?.hash ?? null,
+    },
+  };
+}
+
+/** Campos do DTO que sao gravados inteiros (nao viram caminhos com ponto). */
+const LEAF_PATHS = new Set(['store.openingHours', 'store.acceptedPayments']);
+
+/** `{ store: { delivery: { deliveryFee: 5 } } }` -> `{ 'store.delivery.deliveryFee': 5 }`. */
+function toSetPaths(
+  value: Record<string, unknown>,
+  prefix = '',
+  out: Record<string, unknown> = {},
+): Record<string, unknown> {
+  for (const [key, v] of Object.entries(value)) {
+    if (v === undefined) continue;
+    const path = prefix ? `${prefix}.${key}` : key;
+    if (
+      v &&
+      typeof v === 'object' &&
+      !Array.isArray(v) &&
+      !LEAF_PATHS.has(path)
+    ) {
+      toSetPaths(v as Record<string, unknown>, path, out);
+    } else {
+      out[path] = v;
+    }
+  }
+  return out;
+}
 
 @Injectable()
 export class MenuService {
@@ -59,6 +162,8 @@ export class MenuService {
   constructor(
     @InjectModel(Business.name)
     private readonly businessModel: Model<BusinessDocument>,
+    @InjectModel(MenuOnline.name)
+    private readonly menuModel: Model<MenuOnlineDocument>,
     @InjectModel(Product.name)
     private readonly productModel: Model<ProductDocument>,
     @InjectModel(Category.name)
@@ -66,14 +171,29 @@ export class MenuService {
     private readonly storageService: StorageService,
   ) {}
 
-  private async requireBusiness(businessId: string) {
-    const business = await this.businessModel
-      .findById(new Types.ObjectId(businessId))
-      .select('name logoUrl timezone menu')
-      .lean()
-      .exec();
+  /** Negocio + cardapio dele (com padroes, mesmo que o documento ainda nao exista). */
+  private async load(businessId: string) {
+    const id = new Types.ObjectId(businessId);
+    const [business, doc] = await Promise.all([
+      this.businessModel
+        .findById(id)
+        .select('name logoUrl timezone')
+        .lean()
+        .exec(),
+      this.menuModel.findOne({ businessId: id }).lean<MenuOnline>().exec(),
+    ]);
     if (!business) throw new NotFoundException('Negócio não encontrado');
-    return business;
+    return { business, menu: resolveMenu(doc) };
+  }
+
+  /** Grava no cardapio do negocio (cria o documento na primeira vez). */
+  private async write(
+    businessId: Types.ObjectId,
+    set: Record<string, unknown>,
+  ) {
+    await this.menuModel
+      .updateOne({ businessId }, { $set: set }, { upsert: true })
+      .exec();
   }
 
   /**
@@ -101,14 +221,14 @@ export class MenuService {
 
   /** Snapshot do que SERIA publicado agora (versao/data ainda nao definitivas). */
   private async buildFor(
-    business: Awaited<ReturnType<MenuService['requireBusiness']>>,
+    { business, menu }: Awaited<ReturnType<MenuService['load']>>,
     version: number,
     publishedAt: Date,
   ): Promise<MenuSnapshot> {
-    const businessId = business._id as Types.ObjectId;
-    const menu = { ...DEFAULT_MENU, ...(business.menu ?? {}) };
-    const items = menu.items ?? [];
-    const activeIds = items.filter((i) => i.active).map((i) => i.productId);
+    const businessId = business._id;
+    const activeIds = menu.items
+      .filter((i) => i.active)
+      .map((i) => i.productId);
     const [products, categories] = await Promise.all([
       this.productModel
         .find({ businessId, _id: { $in: activeIds }, isActive: true })
@@ -122,97 +242,69 @@ export class MenuService {
         .exec(),
     ]);
     const stocks = await this.stocksFor(businessId, products);
+    const { store, labelText } = menu;
 
     return buildMenuSnapshot({
       store: {
         slug: menu.slug ?? '',
         name: business.name,
-        description: menu.description ?? '',
-        logoUrl: business.logoUrl || null,
-        coverUrl: menu.coverUrl || null,
-        address: menu.address ?? '',
-        whatsapp: menu.whatsapp ?? '',
+        description: labelText.description,
+        logoUrl: store.images.logoUrl,
+        coverUrl: store.images.coverUrl,
+        address: store.contact.address,
+        whatsapp: store.contact.whatsapp,
         timezone: resolveTimeZone(business.timezone),
-        deliveryFee: menu.deliveryFee ?? 0,
-        deliveryEnabled: menu.deliveryEnabled !== false,
-        pickupEnabled: menu.pickupEnabled ?? true,
-        openingHours: menu.openingHours ?? {},
-        instagram: menu.instagram ?? '',
-        themeColor: /^#[0-9a-fA-F]{6}$/.test(menu.themeColor ?? '')
-          ? menu.themeColor!.toLowerCase()
+        deliveryFee: store.delivery.deliveryFee,
+        deliveryEnabled: store.delivery.deliveryEnabled,
+        deliveryProvider: store.delivery.deliveryProvider,
+        pickupEnabled: store.delivery.pickupEnabled,
+        openingHours: store.openingHours,
+        instagram: store.socialMedia.instagram,
+        highlightLabel: labelText.highlightLabel.trim(),
+        highlightTitle: labelText.highlightTitle.trim(),
+        themeColor: /^#[0-9a-fA-F]{6}$/.test(store.colors.themeColor)
+          ? store.colors.themeColor.toLowerCase()
           : null,
-        acceptedPayments: menu.acceptedPayments?.length
-          ? menu.acceptedPayments
+        acceptedPayments: store.acceptedPayments.length
+          ? store.acceptedPayments
           : [...MENU_PAYMENT_METHODS],
       },
       categories,
+      categoryOrder: menu.categories,
       products,
-      items,
-      optionGroups: menu.optionGroups ?? [],
+      items: menu.items,
+      optionGroups: menu.optionGroups,
       stocks,
       version,
       publishedAt,
     });
   }
 
-  /**
-   * Canal "ao vivo" (rota interna, servido ao publico pelo my-store-cardapio-web-back-api):
-   * disponibilidade, descricao e foto dos produtos que estao no cardapio agora.
-   * Vai ao ar sem "Publicar"; preco e nome nao entram (so publicando).
-   */
-  async liveFor(slug: string) {
-    const business = await this.businessModel
-      .findOne({ 'menu.slug': slug })
-      .select('menu.enabled menu.items')
-      .lean()
-      .exec();
-    if (!business?.menu?.enabled) {
-      throw new NotFoundException('Cardápio não encontrado');
-    }
-    const businessId = business._id as Types.ObjectId;
-    const items = business.menu.items ?? [];
-    const products = await this.productModel
-      .find({
-        businessId,
-        _id: { $in: items.filter((i) => i.active).map((i) => i.productId) },
-        isActive: true,
-      })
-      .select(MENU_PRODUCT_FIELDS)
-      .lean<MenuSourceProduct[]>()
-      .exec();
-    const stocks = await this.stocksFor(businessId, products);
-    return {
-      generatedAt: new Date().toISOString(),
-      products: buildLiveProducts({ products, items, stocks }),
-    };
-  }
-
   async getSettings(businessId: string) {
-    const business = await this.requireBusiness(businessId);
-    const menu = { ...DEFAULT_MENU, ...(business.menu ?? {}) };
+    const loaded = await this.load(businessId);
+    const { menu } = loaded;
     const preview = await this.buildFor(
-      business,
-      menu.publishedVersion,
+      loaded,
+      menu.publication.version,
       new Date(),
     );
-    const {
-      publishedHash: _hash,
-      publishedSlug: _slug,
-      items: _items,
-      optionGroups: _groups,
-      ...settings
-    } = menu;
 
     return {
-      ...settings,
-      logoUrl: business.logoUrl || null,
+      slug: menu.slug ?? '',
+      enabled: menu.enabled,
+      store: menu.store,
+      labelText: menu.labelText,
+      publication: {
+        version: menu.publication.version,
+        lastPublishedAt: menu.publication.lastPublishedAt,
+      },
       publicUrl:
-        menu.lastPublishedAt && menu.slug
+        menu.publication.lastPublishedAt && menu.slug
           ? this.storageService.publicUrl(menuFilePath(menu.slug))
           : null,
       hasUnpublishedChanges:
-        !menu.publishedHash ||
-        menu.publishedHash !== snapshotContentHash(preview),
+        !menu.publication.hash ||
+        menu.publication.hash !== snapshotContentHash(preview),
       productCount: preview.categories.reduce(
         (n, c) => n + c.products.length,
         0,
@@ -221,64 +313,60 @@ export class MenuService {
   }
 
   async updateSettings(businessId: string, dto: UpdateMenuSettingsDto) {
-    const business = await this.requireBusiness(businessId);
-    const current = { ...DEFAULT_MENU, ...(business.menu ?? {}) };
+    const { business, menu } = await this.load(businessId);
+    const bizId = business._id;
 
     // Sem entrega e sem retirada, o cliente nao teria como receber o pedido.
-    const delivery = dto.deliveryEnabled ?? current.deliveryEnabled !== false;
-    const pickup = dto.pickupEnabled ?? current.pickupEnabled !== false;
+    const delivery =
+      dto.store?.delivery?.deliveryEnabled ??
+      menu.store.delivery.deliveryEnabled;
+    const pickup =
+      dto.store?.delivery?.pickupEnabled ?? menu.store.delivery.pickupEnabled;
     if (!delivery && !pickup) {
       throw new BadRequestException(
         'Ative a entrega, a retirada no local ou as duas',
       );
     }
 
-    if (dto.slug !== undefined && dto.slug !== current.slug) {
-      const taken = await this.businessModel
-        .exists({ 'menu.slug': dto.slug, _id: { $ne: business._id } })
+    if (dto.slug !== undefined && dto.slug !== menu.slug) {
+      const taken = await this.menuModel
+        .exists({ slug: dto.slug, businessId: { $ne: bizId } })
         .exec();
       if (taken)
         throw new ConflictException('Este endereço de cardápio já está em uso');
     }
 
-    const set: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(dto)) {
-      if (value !== undefined) set[`menu.${key}`] = value;
-    }
+    const set = toSetPaths(dto as Record<string, unknown>);
 
     // Desligar o cardapio tira o arquivo do ar na hora — o link para de funcionar.
-    if (dto.enabled === false && current.publishedSlug) {
-      await this.storageService.deleteFile(menuFilePath(current.publishedSlug));
+    if (dto.enabled === false && menu.publication.slug) {
+      await this.storageService.deleteFile(menuFilePath(menu.publication.slug));
       Object.assign(set, {
-        'menu.lastPublishedAt': null,
-        'menu.publishedHash': null,
-        'menu.publishedSlug': null,
+        'publication.lastPublishedAt': null,
+        'publication.hash': null,
+        'publication.slug': null,
       });
     }
 
-    if (Object.keys(set).length) {
-      await this.businessModel
-        .updateOne({ _id: business._id }, { $set: set })
-        .exec();
-    }
+    if (Object.keys(set).length) await this.write(bizId, set);
     this.logger.log(
-      `Cardápio configurado: negócio=${businessId} | campos=${Object.keys(dto).join(',')}`,
+      `Cardápio configurado: negócio=${businessId} | campos=${Object.keys(set).join(',')}`,
     );
     return this.getSettings(businessId);
   }
 
   async preview(businessId: string): Promise<MenuSnapshot> {
-    const business = await this.requireBusiness(businessId);
+    const loaded = await this.load(businessId);
     return this.buildFor(
-      business,
-      (business.menu?.publishedVersion ?? 0) + 1,
+      loaded,
+      loaded.menu.publication.version + 1,
       new Date(),
     );
   }
 
   async publish(businessId: string) {
-    const business = await this.requireBusiness(businessId);
-    const menu = { ...DEFAULT_MENU, ...(business.menu ?? {}) };
+    const loaded = await this.load(businessId);
+    const { business, menu } = loaded;
     if (!menu.slug)
       throw new BadRequestException(
         'Defina o endereço (slug) do cardápio antes de publicar',
@@ -287,8 +375,8 @@ export class MenuService {
       throw new BadRequestException('Ative o cardápio antes de publicar');
 
     const publishedAt = new Date();
-    const version = (menu.publishedVersion ?? 0) + 1;
-    const snapshot = await this.buildFor(business, version, publishedAt);
+    const version = menu.publication.version + 1;
+    const snapshot = await this.buildFor(loaded, version, publishedAt);
     if (!snapshot.categories.length) {
       throw new BadRequestException(
         'Nenhum produto marcado para o cardápio (com Delivery próprio ativo)',
@@ -299,23 +387,16 @@ export class MenuService {
       menuFilePath(menu.slug),
       snapshot,
     );
-    if (menu.publishedSlug && menu.publishedSlug !== menu.slug) {
-      await this.storageService.deleteFile(menuFilePath(menu.publishedSlug));
+    if (menu.publication.slug && menu.publication.slug !== menu.slug) {
+      await this.storageService.deleteFile(menuFilePath(menu.publication.slug));
     }
 
-    await this.businessModel
-      .updateOne(
-        { _id: business._id },
-        {
-          $set: {
-            'menu.publishedVersion': version,
-            'menu.lastPublishedAt': publishedAt,
-            'menu.publishedSlug': menu.slug,
-            'menu.publishedHash': snapshotContentHash(snapshot),
-          },
-        },
-      )
-      .exec();
+    await this.write(business._id, {
+      'publication.version': version,
+      'publication.lastPublishedAt': publishedAt,
+      'publication.slug': menu.slug,
+      'publication.hash': snapshotContentHash(snapshot),
+    });
 
     this.logger.log(
       `Cardápio publicado: negócio=${businessId} | slug=${menu.slug} | versão=${version}`,
@@ -324,10 +405,78 @@ export class MenuService {
   }
 
   /* ======================================================================
+   * Categorias — ordem em que aparecem no cardapio
+   * ==================================================================== */
+
+  /** Categorias ativas na ordem do cardapio, com quantos produtos de cada uma vao ao ar. */
+  async listCategories(businessId: string) {
+    const { business, menu } = await this.load(businessId);
+    const bizId = business._id;
+    const activeIds = menu.items
+      .filter((i) => i.active)
+      .map((i) => i.productId);
+    const [categories, products] = await Promise.all([
+      this.categoryModel
+        .find({ businessId: bizId, isActive: true })
+        .select('name icon color')
+        .lean<MenuSourceCategory[]>()
+        .exec(),
+      this.productModel
+        .find({ businessId: bizId, _id: { $in: activeIds }, isActive: true })
+        .select('categoryId prices.caixa prices.ordemBee')
+        .lean<MenuSourceProduct[]>()
+        .exec(),
+    ]);
+    const onMenu = new Map<string, number>();
+    for (const p of products) {
+      if (!menuPrice(p)) continue;
+      const key = p.categoryId ? String(p.categoryId) : OTHER_CATEGORY_ID;
+      onMenu.set(key, (onMenu.get(key) ?? 0) + 1);
+    }
+    const rank = categoryRank(menu.categories);
+    return categories
+      .map((c) => ({
+        id: String(c._id),
+        name: c.name,
+        icon: c.icon ?? null,
+        color: c.color ?? null,
+        /** Produtos desta categoria marcados para o cardapio. */
+        productCount: onMenu.get(String(c._id)) ?? 0,
+        order: rank(String(c._id)),
+      }))
+      .sort(
+        (a, b) => a.order - b.order || a.name.localeCompare(b.name, 'pt-BR'),
+      )
+      .map(({ order: _order, ...c }) => c);
+  }
+
+  /** Grava a ordem arrastada pelo operador (posicao na lista = ordem). */
+  async reorderCategories(businessId: string, dto: ReorderMenuCategoriesDto) {
+    const { business } = await this.load(businessId);
+    const ids = [...new Set(dto.categoryIds)];
+    const owned = await this.categoryModel
+      .countDocuments({
+        businessId: business._id,
+        _id: { $in: ids.map((id) => new Types.ObjectId(id)) },
+      })
+      .exec();
+    if (owned !== ids.length)
+      throw new BadRequestException('Lista com categoria inválida');
+
+    await this.write(business._id, {
+      categories: ids.map((id, order) => ({
+        categoryId: new Types.ObjectId(id),
+        order,
+      })),
+    });
+    return { ok: true };
+  }
+
+  /* ======================================================================
    * Itens do cardapio — lista "O que vai ao ar"
    * ==================================================================== */
 
-  /** Linha da lista: dados do produto + o que e do cardapio (exibir, selo, ordem). */
+  /** Linha da lista: dados do produto + o que e do cardapio (exibir, complementos). */
   private toItemRow(
     p: MenuSourceProduct,
     item: MenuItem | undefined,
@@ -355,39 +504,36 @@ export class MenuService {
       price: price?.value ?? null,
       priceSource: price?.source ?? null,
       active: !!item?.active,
-      tag: item?.tag ?? '',
       optionGroupIds: (item?.optionGroupIds ?? []).map(String),
-      order: item?.order ?? null,
     };
   }
 
   /** Todos os produtos ativos do negocio, com o estado de cada um no cardapio. */
   async listItems(businessId: string) {
-    const business = await this.requireBusiness(businessId);
-    const itemByProduct = indexMenuItems(business.menu?.items) as Map<
-      string,
-      MenuItem
-    >;
+    const { business, menu } = await this.load(businessId);
+    const bizId = business._id;
+    const itemByProduct = indexMenuItems(menu.items) as Map<string, MenuItem>;
     const [products, categories] = await Promise.all([
       this.productModel
-        .find({ businessId: business._id, isActive: true })
+        .find({ businessId: bizId, isActive: true })
         .select(
-          'name categoryId imageUrl stock isCombo comboItems.productId comboItems.quantity prices.caixa prices.deliveryProprio',
+          'name categoryId imageUrl stock isCombo comboItems.productId comboItems.quantity prices.caixa prices.ordemBee',
         )
         .lean<MenuSourceProduct[]>()
         .exec(),
       this.categoryModel
-        .find({ businessId: business._id })
+        .find({ businessId: bizId })
         .select('name icon color')
         .lean<MenuSourceCategory[]>()
         .exec(),
     ]);
     const categoryById = new Map(categories.map((c) => [String(c._id), c]));
-    const stocks = await this.stocksFor(business._id as Types.ObjectId, products);
+    const stocks = await this.stocksFor(bizId, products);
 
-    // Quem ja tem ordem no cardapio vem primeiro, na ordem definida; o resto por nome.
-    const rank = (order: number | null) =>
-      order === null ? Number.MAX_SAFE_INTEGER : order;
+    // Mesma ordem do cardapio: categorias na ordem definida, produtos por nome.
+    const rank = categoryRank(menu.categories);
+    const rankOf = (row: { category: { id: string } | null }) =>
+      rank(row.category?.id ?? OTHER_CATEGORY_ID);
     return products
       .map((p) =>
         this.toItemRow(
@@ -399,13 +545,17 @@ export class MenuService {
       )
       .sort(
         (a, b) =>
-          rank(a.order) - rank(b.order) ||
+          rankOf(a) - rankOf(b) ||
+          (a.category?.name ?? '').localeCompare(
+            b.category?.name ?? '',
+            'pt-BR',
+          ) ||
           a.name.localeCompare(b.name, 'pt-BR'),
       );
   }
 
   /**
-   * Edita uma linha: exibir e/ou selo. O preco nao se edita aqui: e o
+   * Edita uma linha: exibir e/ou complementos. O preco nao se edita aqui: e o
    * cadastrado no produto (ver menuPrice). Exibir exige produto com preco.
    */
   async updateItem(
@@ -413,33 +563,26 @@ export class MenuService {
     productId: string,
     dto: UpdateMenuItemDto,
   ) {
-    const business = await this.requireBusiness(businessId);
+    const { business, menu } = await this.load(businessId);
+    const bizId = business._id;
     const product = await this.productModel
       .findOne({
         _id: new Types.ObjectId(productId),
-        businessId: business._id,
+        businessId: bizId,
         isActive: true,
       })
       .exec();
     if (!product) throw new NotFoundException('Produto não encontrado');
 
-    const items = [...(business.menu?.items ?? [])];
+    const items = [...menu.items];
     const index = items.findIndex((i) => String(i.productId) === productId);
     const current: MenuItem =
       index >= 0
         ? { ...items[index] }
-        : {
-            productId: product._id as Types.ObjectId,
-            active: false,
-            order:
-              items.reduce((max, i) => Math.max(max, i.order ?? 0), -1) + 1,
-          };
+        : { productId: product._id, active: false };
 
-    if (dto.tag !== undefined) current.tag = dto.tag.trim() || undefined;
     if (dto.optionGroupIds !== undefined) {
-      const known = new Set(
-        (business.menu?.optionGroups ?? []).map((g) => String(g._id)),
-      );
+      const known = new Set(menu.optionGroups.map((g) => String(g._id)));
       const ids = [...new Set(dto.optionGroupIds)];
       if (ids.some((id) => !known.has(id))) {
         throw new BadRequestException('Grupo de complementos inválido');
@@ -456,9 +599,7 @@ export class MenuService {
 
     if (index >= 0) items[index] = current;
     else items.push(current);
-    await this.businessModel
-      .updateOne({ _id: business._id }, { $set: { 'menu.items': items } })
-      .exec();
+    await this.write(bizId, { items });
 
     this.logger.log(
       `Item do cardápio: negócio=${businessId} | produto=${productId} | campos=${Object.keys(dto).join(',')}`,
@@ -475,46 +616,8 @@ export class MenuService {
       source,
       current,
       new Map(categories.map((c) => [String(c._id), c])),
-      await this.stocksFor(business._id as Types.ObjectId, [source]),
+      await this.stocksFor(bizId, [source]),
     );
-  }
-
-  /** Grava a ordem arrastada pelo operador (posicao na lista = ordem). */
-  async reorderItems(businessId: string, dto: ReorderMenuItemsDto) {
-    const business = await this.requireBusiness(businessId);
-    const ids = [...new Set(dto.productIds)];
-    const owned = await this.productModel
-      .countDocuments({
-        businessId: business._id,
-        _id: { $in: ids.map((id) => new Types.ObjectId(id)) },
-      })
-      .exec();
-    if (owned !== ids.length)
-      throw new BadRequestException('Lista com produto inválido');
-
-    const byProduct = indexMenuItems(business.menu?.items) as Map<
-      string,
-      MenuItem
-    >;
-    const reordered: MenuItem[] = ids.map((id, order) => ({
-      ...(byProduct.get(id) ?? {
-        productId: new Types.ObjectId(id),
-        active: false,
-      }),
-      order,
-    }));
-    // Itens fora da lista enviada (ex.: produto desativado) mantem o estado e vao para o fim.
-    const rest = (business.menu?.items ?? [])
-      .filter((i) => !ids.includes(String(i.productId)))
-      .map((i, n) => ({ ...i, order: ids.length + n }));
-
-    await this.businessModel
-      .updateOne(
-        { _id: business._id },
-        { $set: { 'menu.items': [...reordered, ...rest] } },
-      )
-      .exec();
-    return { ok: true };
   }
 
   /* ======================================================================
@@ -546,10 +649,9 @@ export class MenuService {
   }
 
   async listOptionGroups(businessId: string) {
-    const business = await this.requireBusiness(businessId);
-    const items = business.menu?.items;
-    return (business.menu?.optionGroups ?? []).map((g) =>
-      this.toGroupRow(g, this.usageCount(items, String(g._id))),
+    const { menu } = await this.load(businessId);
+    return menu.optionGroups.map((g) =>
+      this.toGroupRow(g, this.usageCount(menu.items, String(g._id))),
     );
   }
 
@@ -562,8 +664,8 @@ export class MenuService {
     if (dto.min > dto.max) {
       throw new BadRequestException('O mínimo não pode ser maior que o máximo');
     }
-    const business = await this.requireBusiness(businessId);
-    const groups = [...(business.menu?.optionGroups ?? [])];
+    const { business, menu } = await this.load(businessId);
+    const groups = [...menu.optionGroups];
     const index = groupId
       ? groups.findIndex((g) => String(g._id) === groupId)
       : -1;
@@ -594,100 +696,94 @@ export class MenuService {
     if (index >= 0) groups[index] = group;
     else groups.push(group);
 
-    await this.businessModel
-      .updateOne(
-        { _id: business._id },
-        { $set: { 'menu.optionGroups': groups } },
-      )
-      .exec();
+    await this.write(business._id, { optionGroups: groups });
     this.logger.log(
       `Complementos salvos: negócio=${businessId} | grupo=${String(group._id)}`,
     );
     return this.toGroupRow(
       group,
-      this.usageCount(business.menu?.items, String(group._id)),
+      this.usageCount(menu.items, String(group._id)),
     );
   }
 
   /** Remove o grupo e tira ele de todos os itens que o usavam. */
   async removeOptionGroup(businessId: string, groupId: string) {
-    const business = await this.requireBusiness(businessId);
-    const groups = business.menu?.optionGroups ?? [];
-    if (!groups.some((g) => String(g._id) === groupId)) {
+    const { business, menu } = await this.load(businessId);
+    if (!menu.optionGroups.some((g) => String(g._id) === groupId)) {
       throw new NotFoundException('Grupo de complementos não encontrado');
     }
-    const items = (business.menu?.items ?? []).map((i) => ({
+    const items = menu.items.map((i) => ({
       ...i,
       optionGroupIds: (i.optionGroupIds ?? []).filter(
         (id) => String(id) !== groupId,
       ),
     }));
-    await this.businessModel
-      .updateOne(
-        { _id: business._id },
-        {
-          $set: {
-            'menu.optionGroups': groups.filter(
-              (g) => String(g._id) !== groupId,
-            ),
-            'menu.items': items,
-          },
-        },
-      )
-      .exec();
+    await this.write(business._id, {
+      optionGroups: menu.optionGroups.filter((g) => String(g._id) !== groupId),
+      items,
+    });
     return { ok: true };
   }
 
   /* ======================================================================
-   * Logo e capa da loja
+   * Logo e capa do cardapio
    * ==================================================================== */
 
+  private static readonly IMAGE_PATH = {
+    logo: 'store.images.logoUrl',
+    cover: 'store.images.coverUrl',
+  } as const;
+
   /**
-   * Troca a logo (Business.logoUrl — a mesma do resto do sistema) ou a capa
-   * do cardapio (menu.coverUrl). Apaga a imagem anterior se era nossa.
+   * Troca a logo ou a capa do cardapio (store.images). Sao do cardapio — o
+   * logo do negocio no sistema nao muda. Apaga a imagem anterior se era nossa.
    */
   async setStoreImage(
     businessId: string,
     kind: 'logo' | 'cover',
     file: Express.Multer.File,
   ) {
-    const business = await this.requireBusiness(businessId);
+    const { business, menu } = await this.load(businessId);
     const previous =
-      kind === 'logo' ? business.logoUrl : business.menu?.coverUrl;
+      kind === 'logo' ? menu.store.images.logoUrl : menu.store.images.coverUrl;
     const { url } = await this.storageService.uploadStoreImage(
       businessId,
       kind,
       file,
     );
-    await this.businessModel
-      .updateOne(
-        { _id: business._id },
-        { $set: kind === 'logo' ? { logoUrl: url } : { 'menu.coverUrl': url } },
-      )
-      .exec();
-    await this.deleteOwnImage(previous);
+    await this.write(business._id, {
+      [MenuService.IMAGE_PATH[kind]]: url,
+    });
+    await this.deleteOwnImage(previous, business.logoUrl);
     this.logger.log(
-      `Imagem da loja (${kind}) atualizada: negócio=${businessId}`,
+      `Imagem do cardápio (${kind}) atualizada: negócio=${businessId}`,
     );
     return this.getSettings(businessId);
   }
 
   async removeStoreImage(businessId: string, kind: 'logo' | 'cover') {
-    const business = await this.requireBusiness(businessId);
+    const { business, menu } = await this.load(businessId);
     const previous =
-      kind === 'logo' ? business.logoUrl : business.menu?.coverUrl;
-    await this.businessModel
+      kind === 'logo' ? menu.store.images.logoUrl : menu.store.images.coverUrl;
+    await this.menuModel
       .updateOne(
-        { _id: business._id },
-        { $unset: kind === 'logo' ? { logoUrl: '' } : { 'menu.coverUrl': '' } },
+        { businessId: business._id },
+        { $unset: { [MenuService.IMAGE_PATH[kind]]: '' } },
       )
       .exec();
-    await this.deleteOwnImage(previous);
+    await this.deleteOwnImage(previous, business.logoUrl);
     return this.getSettings(businessId);
   }
 
-  /** Apaga do Storage so imagens nossas (URL colada de fora fica intacta). */
-  private async deleteOwnImage(url: string | undefined) {
+  /**
+   * Apaga do Storage so imagens nossas (URL colada de fora fica intacta) e
+   * nunca a que ainda e o logo do negocio (o cardapio pode ter herdado ela).
+   */
+  private async deleteOwnImage(
+    url: string | null | undefined,
+    businessLogoUrl?: string,
+  ) {
+    if (!url || url === businessLogoUrl) return;
     const path = this.storageService.pathFromPublicUrl(url);
     if (!path) return;
     try {

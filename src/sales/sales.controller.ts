@@ -1,4 +1,13 @@
-import { Body, Controller, ForbiddenException, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  ForbiddenException,
+  Get,
+  Param,
+  Patch,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { SalesService } from './sales.service';
 import { BusinessService } from '../business/business.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
@@ -55,8 +64,18 @@ export class SalesController {
     @Query('dateTo') dateTo?: string,
     @Query('operatorId') operatorId?: string,
   ) {
-    const targetOperatorId = (user.role === Role.OWNER || user.role === Role.GERENTE) ? operatorId : undefined;
-    return this.salesService.getOperatorCashClose(user.uid, user.businessId, dateFrom, dateTo, targetOperatorId, user.role);
+    const targetOperatorId =
+      user.role === Role.OWNER || user.role === Role.GERENTE
+        ? operatorId
+        : undefined;
+    return this.salesService.getOperatorCashClose(
+      user.uid,
+      user.businessId,
+      dateFrom,
+      dateTo,
+      targetOperatorId,
+      user.role,
+    );
   }
 
   @Get('summary/cashclose')
@@ -82,14 +101,23 @@ export class SalesController {
     @Param('id') id: string,
     @Body() dto: UpdateSaleDto,
   ) {
-    return this.salesService.update(id, user.businessId, user.uid, user._id, dto);
+    return this.salesService.update(
+      id,
+      user.businessId,
+      user.uid,
+      user._id,
+      dto,
+    );
   }
 
   @Patch(':id/cancel')
   @Roles(Role.OWNER, Role.GERENTE)
   async cancel(@CurrentUser() user: any, @Param('id') id: string) {
     if (user.role === Role.GERENTE) {
-      const perms = await this.businessService.getEffectivePermissions(user.businessId, user.role);
+      const perms = await this.businessService.getEffectivePermissions(
+        user.businessId,
+        user.role,
+      );
       if (!perms.canCancelSales) {
         throw new ForbiddenException('Sem permissão para cancelar vendas');
       }

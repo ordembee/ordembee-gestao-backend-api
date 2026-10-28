@@ -30,7 +30,10 @@ export class ProductsController {
 
   private async assertCanEdit(user: any): Promise<void> {
     if (user.role === Role.GERENTE) {
-      const perms = await this.businessService.getEffectivePermissions(user.businessId, user.role);
+      const perms = await this.businessService.getEffectivePermissions(
+        user.businessId,
+        user.role,
+      );
       if (!perms.canEditProducts) {
         throw new ForbiddenException('Sem permissão para editar produtos');
       }
@@ -51,7 +54,12 @@ export class ProductsController {
     @Query('categoryId') categoryId?: string,
     @Query('includeInactive') includeInactive?: string,
   ) {
-    return this.productsService.findAll(user.businessId, search, categoryId, includeInactive === 'true');
+    return this.productsService.findAll(
+      user.businessId,
+      search,
+      categoryId,
+      includeInactive === 'true',
+    );
   }
 
   @Get(':id')
@@ -61,7 +69,11 @@ export class ProductsController {
 
   @Patch(':id')
   @Roles(Role.OWNER, Role.GERENTE)
-  async update(@CurrentUser() user: any, @Param('id') id: string, @Body() dto: UpdateProductDto) {
+  async update(
+    @CurrentUser() user: any,
+    @Param('id') id: string,
+    @Body() dto: UpdateProductDto,
+  ) {
     await this.assertCanEdit(user);
     return this.productsService.update(id, user.businessId, dto);
   }
@@ -73,7 +85,10 @@ export class ProductsController {
       limits: { fileSize: 5 * 1024 * 1024 },
       fileFilter: (_req, file, cb) => {
         if (!file.mimetype.startsWith('image/')) {
-          return cb(new BadRequestException('Apenas imagens são permitidas'), false);
+          return cb(
+            new BadRequestException('Apenas imagens são permitidas'),
+            false,
+          );
         }
         cb(null, true);
       },

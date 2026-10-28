@@ -3,6 +3,7 @@ import {
   ArrayMinSize,
   IsArray,
   IsDefined,
+  IsEmail,
   IsEnum,
   IsIn,
   IsInt,
@@ -48,6 +49,12 @@ class MenuOrderCustomerDto {
 
   @Matches(/^\d{10,11}$/, { message: 'phone deve ter 10 ou 11 dígitos' })
   phone: string;
+
+  /** Opcional: vai para o checkout da InfinitePay. */
+  @IsOptional()
+  @IsEmail()
+  @MaxLength(120)
+  email?: string;
 }
 
 class MenuOrderAddressDto {
@@ -76,16 +83,44 @@ class MenuOrderAddressDto {
   @IsString()
   @MaxLength(120)
   reference?: string;
+
+  /** Cidade e UF: obrigatorios na entrega pela Uber (validado no servico). */
+  @IsOptional()
+  @IsString()
+  @Length(2, 80)
+  city?: string;
+
+  @IsOptional()
+  @Matches(/^[A-Za-z]{2}$/)
+  state?: string;
+
+  /** "Tocar o interfone 203", "Deixar na portaria". */
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  instructions?: string;
+}
+
+/** Quem recebe a entrega (pode nao ser quem pediu). */
+class MenuOrderRecipientDto {
+  @IsString()
+  @Length(3, 80)
+  name: string;
+
+  @Matches(/^\d{10,11}$/, { message: 'phone deve ter 10 ou 11 dígitos' })
+  phone: string;
 }
 
 class MenuOrderPaymentDto {
   @IsIn(MENU_PAYMENT_METHODS)
   method: (typeof MENU_PAYMENT_METHODS)[number];
 
+  // Bandeira opcional no cartão (retirada não pergunta); quando vem, precisa ser conhecida.
   @ValidateIf(
     (p: MenuOrderPaymentDto) =>
-      p.method === PaymentMethod.CARTAO_CREDITO ||
-      p.method === PaymentMethod.CARTAO_DEBITO,
+      (p.method === PaymentMethod.CARTAO_CREDITO ||
+        p.method === PaymentMethod.CARTAO_DEBITO) &&
+      p.brand !== undefined,
   )
   @IsIn(CARD_BRANDS)
   brand?: (typeof CARD_BRANDS)[number];
@@ -148,9 +183,26 @@ export class MenuOrderDto {
   @Type(() => MenuOrderAddressDto)
   address?: MenuOrderAddressDto;
 
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => MenuOrderRecipientDto)
+  recipient?: MenuOrderRecipientDto;
+
+  /** Cotacao da Uber mostrada no checkout (entrega pela Uber). */
+  @IsOptional()
+  @IsString()
+  @Length(3, 120)
+  quoteId?: string;
+
   @ValidateNested()
   @Type(() => MenuOrderPaymentDto)
   payment: MenuOrderPaymentDto;
+
+  /** Pagina do cardapio para onde a InfinitePay devolve o cliente depois de pagar. */
+  @IsOptional()
+  @IsString()
+  @Matches(/^https?:\/\/\S{3,480}$/, { message: 'redirectUrl inválida' })
+  redirectUrl?: string;
 
   @IsArray()
   @ArrayMinSize(1)

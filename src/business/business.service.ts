@@ -11,7 +11,11 @@ import {
 import { Role } from '../common/enums/role.enum';
 import { UpdatePermissionsDto } from './dto/update-permissions.dto';
 import { UpdateBusinessDto } from './dto/update-business.dto';
-import { DEFAULT_TIMEZONE, resolveTimeZone } from '../common/date/timezone.util';
+import { onlyDigits } from '../common/document/cpf-cnpj';
+import {
+  DEFAULT_TIMEZONE,
+  resolveTimeZone,
+} from '../common/date/timezone.util';
 
 const TZ_CACHE_TTL_MS = 5 * 60 * 1000;
 
@@ -44,7 +48,9 @@ export class BusinessService {
   async getSettings(businessId: string) {
     const business = await this.businessModel
       .findById(new Types.ObjectId(businessId))
-      .select('name city currency businessType logoUrl timezone')
+      .select(
+        'name city currency businessType logoUrl timezone document phone email address',
+      )
       .lean()
       .exec();
 
@@ -57,27 +63,70 @@ export class BusinessService {
       businessType: business.businessType ?? null,
       logoUrl: business.logoUrl ?? null,
       timezone: resolveTimeZone(business.timezone),
+      document: business.document ?? null,
+      phone: business.phone ?? null,
+      email: business.email ?? null,
+      address: business.address ?? null,
     };
   }
 
   async updateSettings(businessId: string, dto: UpdateBusinessDto) {
     const update: Record<string, unknown> = {};
+    const unset: Record<string, ''> = {};
     if (dto.name !== undefined) update.name = dto.name;
     if (dto.city !== undefined) update.city = dto.city;
+    // Texto vazio apaga o campo; CPF/CNPJ fica so com digitos.
+    if (dto.document !== undefined) {
+      if (dto.document === '') unset.document = '';
+      else update.document = onlyDigits(dto.document);
+    }
+    if (dto.phone !== undefined) {
+      if (dto.phone === '') unset.phone = '';
+      else update.phone = dto.phone.trim();
+    }
+    if (dto.email !== undefined) {
+      if (dto.email === '') unset.email = '';
+      else update.email = dto.email.trim().toLowerCase();
+    }
+    if (dto.address !== undefined) {
+      update.address = {
+        cep: dto.address.cep,
+        street: dto.address.street.trim(),
+        number: dto.address.number.trim(),
+        district: dto.address.district.trim(),
+        city: dto.address.city.trim(),
+        state: dto.address.state.toUpperCase(),
+        complement: dto.address.complement?.trim() || undefined,
+      };
+      // A cidade do cadastro acompanha o endereco.
+      if (dto.city === undefined) update.city = dto.address.city.trim();
+    }
     if (dto.currency !== undefined) update.currency = dto.currency;
     if (dto.businessType !== undefined) update.businessType = dto.businessType;
-    if (dto.timezone !== undefined) update.timezone = resolveTimeZone(dto.timezone);
+    if (dto.timezone !== undefined)
+      update.timezone = resolveTimeZone(dto.timezone);
 
     const business = await this.businessModel
-      .findByIdAndUpdate(new Types.ObjectId(businessId), { $set: update }, { new: true })
-      .select('name city currency businessType logoUrl timezone')
+      .findByIdAndUpdate(
+        new Types.ObjectId(businessId),
+        {
+          ...(Object.keys(update).length ? { $set: update } : {}),
+          ...(Object.keys(unset).length ? { $unset: unset } : {}),
+        },
+        { new: true },
+      )
+      .select(
+        'name city currency businessType logoUrl timezone document phone email address',
+      )
       .lean()
       .exec();
 
     if (!business) throw new NotFoundException('Negócio não encontrado');
 
     this.tzCache.delete(businessId);
-    this.logger.log(`Ajustes do negócio atualizados: negócio=${businessId} | campos=${Object.keys(update).join(',')}`);
+    this.logger.log(
+      `Ajustes do negócio atualizados: negócio=${businessId} | campos=${[...Object.keys(update), ...Object.keys(unset)].join(',')}`,
+    );
 
     return {
       name: business.name,
@@ -86,6 +135,10 @@ export class BusinessService {
       businessType: business.businessType ?? null,
       logoUrl: business.logoUrl ?? null,
       timezone: resolveTimeZone(business.timezone),
+      document: business.document ?? null,
+      phone: business.phone ?? null,
+      email: business.email ?? null,
+      address: business.address ?? null,
     };
   }
 
@@ -128,7 +181,10 @@ export class BusinessService {
     businessId: string,
     role: Role,
   ): Promise<EffectivePermissions> {
-    const ALL_TRUE = { ...DEFAULT_PERMISSIONS.gerente, ...DEFAULT_PERMISSIONS.caixa };
+    const ALL_TRUE = {
+      ...DEFAULT_PERMISSIONS.gerente,
+      ...DEFAULT_PERMISSIONS.caixa,
+    };
     Object.keys(ALL_TRUE).forEach((k) => ((ALL_TRUE as any)[k] = true));
 
     if (role === Role.OWNER) return ALL_TRUE as EffectivePermissions;

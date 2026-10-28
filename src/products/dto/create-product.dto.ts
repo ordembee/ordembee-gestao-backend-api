@@ -53,6 +53,11 @@ class ProductPricesDto {
   @ValidateNested()
   @Type(() => ChannelPriceDto)
   deliveryProprio?: ChannelPriceDto;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => ChannelPriceDto)
+  ordemBee?: ChannelPriceDto;
 }
 
 export class CreateProductDto {

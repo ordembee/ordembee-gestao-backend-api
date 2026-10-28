@@ -19,7 +19,10 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { Role } from '../common/enums/role.enum';
 import { UpdateMenuSettingsDto } from './dto/update-menu-settings.dto';
-import { ReorderMenuItemsDto, UpdateMenuItemDto } from './dto/menu-items.dto';
+import {
+  ReorderMenuCategoriesDto,
+  UpdateMenuItemDto,
+} from './dto/menu-items.dto';
 import { SaveOptionGroupDto } from './dto/option-group.dto';
 import { ParseObjectIdPipe } from './parse-object-id.pipe';
 import { ParseStoreImageKindPipe } from './parse-store-image-kind.pipe';
@@ -70,18 +73,23 @@ export class MenuController {
     return this.menuService.publish(user.businessId);
   }
 
+  @Get('categories')
+  listCategories(@CurrentUser() user: any) {
+    return this.menuService.listCategories(user.businessId);
+  }
+
+  @Put('categories/order')
+  async reorderCategories(
+    @CurrentUser() user: any,
+    @Body() dto: ReorderMenuCategoriesDto,
+  ) {
+    await this.assertCanEdit(user);
+    return this.menuService.reorderCategories(user.businessId, dto);
+  }
+
   @Get('items')
   listItems(@CurrentUser() user: any) {
     return this.menuService.listItems(user.businessId);
-  }
-
-  @Put('items/order')
-  async reorderItems(
-    @CurrentUser() user: any,
-    @Body() dto: ReorderMenuItemsDto,
-  ) {
-    await this.assertCanEdit(user);
-    return this.menuService.reorderItems(user.businessId, dto);
   }
 
   @Patch('items/:productId')

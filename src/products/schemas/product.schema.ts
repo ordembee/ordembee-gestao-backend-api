@@ -39,6 +39,9 @@ class ProductPrices {
 
   @Prop({ type: ChannelPrice, default: () => ({ value: 0, active: false }) })
   deliveryProprio: ChannelPrice;
+
+  @Prop({ type: ChannelPrice, default: () => ({ value: 0, active: false }) })
+  ordemBee: ChannelPrice;
 }
 
 @Schema({ timestamps: true })
@@ -104,5 +107,8 @@ ProductSchema.index({ businessId: 1, name: 'text', description: 'text' });
 // 1 Precificação = 1 Produto ativo por vez.
 ProductSchema.index(
   { businessId: 1, pricingId: 1 },
-  { unique: true, partialFilterExpression: { pricingId: { $exists: true }, isActive: true } },
+  {
+    unique: true,
+    partialFilterExpression: { pricingId: { $exists: true }, isActive: true },
+  },
 );

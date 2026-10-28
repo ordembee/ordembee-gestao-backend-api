@@ -29,7 +29,11 @@ describe('InternalSignatureGuard', () => {
     const ctx = contextFor(
       {
         'x-internal-timestamp': ts,
-        'x-internal-signature': signInternalRequest(SECRET, ts, `POST /internal/menu-orders\n${body}`),
+        'x-internal-signature': signInternalRequest(
+          SECRET,
+          ts,
+          `POST /internal/menu-orders\n${body}`,
+        ),
       },
       body,
     );
@@ -72,7 +76,11 @@ describe('InternalSignatureGuard', () => {
     const ctx = contextFor(
       {
         'x-internal-timestamp': ts,
-        'x-internal-signature': signInternalRequest(SECRET, ts, `POST /internal/menu-orders\n${body}`),
+        'x-internal-signature': signInternalRequest(
+          SECRET,
+          ts,
+          `POST /internal/menu-orders\n${body}`,
+        ),
       },
       '{"slug":"outra-loja"}',
     );
@@ -84,7 +92,11 @@ describe('InternalSignatureGuard', () => {
     const ctx = contextFor(
       {
         'x-internal-timestamp': ts,
-        'x-internal-signature': signInternalRequest(SECRET, ts, `POST /internal/menu-orders\n${body}`),
+        'x-internal-signature': signInternalRequest(
+          SECRET,
+          ts,
+          `POST /internal/menu-orders\n${body}`,
+        ),
       },
       body,
     );
@@ -114,33 +126,58 @@ describe('InternalSignatureGuard', () => {
       }) as any;
 
     it('assina "GET /internal/..." independente do prefixo', () => {
-      expect(internalGetSigningPayload('get', '/api/v1/internal/menus/tia/live')).toBe(
-        'GET /internal/menus/tia/live',
-      );
-      expect(internalGetSigningPayload('GET', '/v1/internal/menus/tia/live')).toBe(
-        'GET /internal/menus/tia/live',
-      );
+      expect(
+        internalGetSigningPayload('get', '/api/v1/internal/menus/tia/live'),
+      ).toBe('GET /internal/menus/tia/live');
+      expect(
+        internalGetSigningPayload('GET', '/v1/internal/menus/tia/live'),
+      ).toBe('GET /internal/menus/tia/live');
     });
 
     it('vetor fixo do contrato GET com o my-store-cardapio-web-back-api', () => {
-      expect(signInternalRequest('abc', '1700000000000', 'GET /internal/menus/tia/live')).toBe(
+      expect(
+        signInternalRequest(
+          'abc',
+          '1700000000000',
+          'GET /internal/menus/tia/live',
+        ),
+      ).toBe(
         'c9ed8391a493eb9e640948712dffd9d2694bbc225cf5c91c921b1bcda0de4743',
       );
     });
 
     it('vetor fixo do contrato POST com o my-store-cardapio-web-back-api', () => {
-      const payload = internalSigningPayload('POST', '/api/v1/internal/menu-orders', Buffer.from('{}'))!;
-      expect(signInternalRequest('abc', '1700000000000', payload)).toBe('d7da8d3c8752f3d4f411089177ab0d31d276db7c81ff3ac26d801f4d72223acb');
+      const payload = internalSigningPayload(
+        'POST',
+        '/api/v1/internal/menu-orders',
+        Buffer.from('{}'),
+      )!;
+      expect(signInternalRequest('abc', '1700000000000', payload)).toBe(
+        'd7da8d3c8752f3d4f411089177ab0d31d276db7c81ff3ac26d801f4d72223acb',
+      );
     });
 
-  it('aceita GET assinado e recusa a mesma assinatura em outra URL', () => {
+    it('aceita GET assinado e recusa a mesma assinatura em outra URL', () => {
       const ts = String(Date.now());
-      const sig = signInternalRequest(SECRET, ts, 'GET /internal/menus/tia/live');
-      const headers = { 'x-internal-timestamp': ts, 'x-internal-signature': sig };
-      expect(guard().canActivate(getContext('/api/v1/internal/menus/tia/live', headers))).toBe(true);
-      expect(() => guard().canActivate(getContext('/api/v1/internal/menus/outra/live', headers))).toThrow(
-        UnauthorizedException,
+      const sig = signInternalRequest(
+        SECRET,
+        ts,
+        'GET /internal/menus/tia/live',
       );
+      const headers = {
+        'x-internal-timestamp': ts,
+        'x-internal-signature': sig,
+      };
+      expect(
+        guard().canActivate(
+          getContext('/api/v1/internal/menus/tia/live', headers),
+        ),
+      ).toBe(true);
+      expect(() =>
+        guard().canActivate(
+          getContext('/api/v1/internal/menus/outra/live', headers),
+        ),
+      ).toThrow(UnauthorizedException);
     });
   });
 
@@ -148,24 +185,41 @@ describe('InternalSignatureGuard', () => {
     const ts = String(Date.now());
     const headers = {
       'x-internal-timestamp': ts,
-      'x-internal-signature': signInternalRequest(SECRET, ts, `POST /internal/menu-orders\n${body}`),
+      'x-internal-signature': signInternalRequest(
+        SECRET,
+        ts,
+        `POST /internal/menu-orders\n${body}`,
+      ),
     };
     const at = (url: string) =>
       ({
         switchToHttp: () => ({
-          getRequest: () => ({ method: 'POST', url, originalUrl: url, headers, rawBody: Buffer.from(body) }),
+          getRequest: () => ({
+            method: 'POST',
+            url,
+            originalUrl: url,
+            headers,
+            rawBody: Buffer.from(body),
+          }),
         }),
       }) as any;
     expect(guard().canActivate(at('/api/v1/internal/menu-orders'))).toBe(true);
-    expect(() => guard().canActivate(at('/api/v1/internal/outra-rota'))).toThrow(UnauthorizedException);
+    expect(() =>
+      guard().canActivate(at('/api/v1/internal/outra-rota')),
+    ).toThrow(UnauthorizedException);
   });
 
   it('recusa segredo com menos de 32 caracteres', () => {
     const ts = String(Date.now());
     const ctx = contextFor(
-      { 'x-internal-timestamp': ts, 'x-internal-signature': signInternalRequest('curto', ts, body) },
+      {
+        'x-internal-timestamp': ts,
+        'x-internal-signature': signInternalRequest('curto', ts, body),
+      },
       body,
     );
-    expect(() => guard('curto').canActivate(ctx)).toThrow(UnauthorizedException);
+    expect(() => guard('curto').canActivate(ctx)).toThrow(
+      UnauthorizedException,
+    );
   });
 });

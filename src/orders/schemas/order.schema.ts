@@ -170,6 +170,231 @@ class OrderRequestedPayment {
   /** Troco para quanto (dinheiro). */
   @Prop({ min: 0 })
   changeFor?: number;
+
+  /** Pix pago ANTES (entrega Uber): a loja confere o extrato e registra o pagamento. */
+  @Prop()
+  prepaid?: boolean;
+}
+
+/**
+ * Cobranca no checkout da InfinitePay (pedido do cardapio pago antes). O
+ * `orderNsu` e o nosso `externalRef`; o resto e preenchido quando o pagamento
+ * e confirmado (webhook ou consulta `payment_check`).
+ */
+@Schema({ _id: false })
+class OrderInfinitePay {
+  @Prop({ required: true })
+  orderNsu: string;
+
+  @Prop()
+  checkoutUrl?: string;
+
+  /** Para onde o cliente volta depois de pagar (pagina do cardapio). */
+  @Prop()
+  redirectUrl?: string;
+
+  @Prop()
+  invoiceSlug?: string;
+
+  @Prop()
+  transactionNsu?: string;
+
+  /** 'pix' | 'credit_card' */
+  @Prop()
+  captureMethod?: string;
+
+  @Prop()
+  installments?: number;
+
+  @Prop()
+  receiptUrl?: string;
+
+  /**
+   * Valor cobrado no link quando nao e o total do pedido (sinal de um pedido
+   * criado no painel). Ausente = o link cobra o total.
+   */
+  @Prop({ min: 0 })
+  chargeAmount?: number;
+
+  /** Reais que a InfinitePay informou ter cobrado (pode incluir juros do parcelamento). */
+  @Prop()
+  paidAmount?: number;
+
+  @Prop()
+  paidAt?: Date;
+}
+
+/** Estados da entrega na Uber Direct (mesmos nomes da API). */
+export const UBER_DELIVERY_STATUSES = [
+  'pending',
+  'pickup',
+  'pickup_complete',
+  'dropoff',
+  'delivered',
+  'canceled',
+  'returned',
+] as const;
+export type UberDeliveryStatus = (typeof UBER_DELIVERY_STATUSES)[number];
+
+/** Estados em que a corrida ainda esta valendo (nao da para pedir outra). */
+export const UBER_ACTIVE_STATUSES: UberDeliveryStatus[] = [
+  'pending',
+  'pickup',
+  'pickup_complete',
+  'dropoff',
+];
+
+/** Endereco de entrega estruturado (o que a Uber precisa). */
+@Schema({ _id: false })
+class OrderDropoffAddress {
+  @Prop({ required: true })
+  cep: string;
+
+  @Prop({ required: true })
+  street: string;
+
+  @Prop({ required: true })
+  number: string;
+
+  @Prop({ required: true })
+  district: string;
+
+  @Prop({ required: true })
+  city: string;
+
+  @Prop({ required: true })
+  state: string;
+
+  @Prop()
+  complement?: string;
+}
+
+@Schema({ _id: false })
+class OrderCourier {
+  @Prop()
+  name?: string;
+
+  @Prop()
+  phone?: string;
+
+  @Prop()
+  vehicleType?: string;
+
+  @Prop()
+  vehicleMake?: string;
+
+  @Prop()
+  vehicleModel?: string;
+
+  @Prop()
+  vehicleColor?: string;
+
+  @Prop()
+  licensePlate?: string;
+
+  @Prop()
+  photoUrl?: string;
+
+  @Prop()
+  rating?: number;
+
+  @Prop()
+  lat?: number;
+
+  @Prop()
+  lng?: number;
+
+  @Prop()
+  updatedAt?: Date;
+}
+
+@Schema({ _id: false })
+class OrderDeliveryEvent {
+  @Prop({ required: true })
+  status: string;
+
+  @Prop({ default: () => new Date() })
+  at: Date;
+
+  /** 'webhook' | 'sync' | 'operador'. */
+  @Prop()
+  source?: string;
+}
+
+/**
+ * Entrega pela Uber Direct. Nasce no pedido do cardapio (cotacao que o
+ * cliente pagou) e ganha `uberDeliveryId` quando o operador solicita o
+ * entregador — com uma cotacao NOVA, porque a original expira em minutos.
+ */
+@Schema({ _id: false })
+class OrderDelivery {
+  @Prop({ required: true, default: 'UBER' })
+  provider: 'UBER';
+
+  /** Cotacao mostrada ao cliente no checkout. */
+  @Prop({ required: true })
+  quoteId: string;
+
+  /** Frete que o cliente pagou (= `Order.deliveryFee` na criacao). */
+  @Prop({ required: true, min: 0 })
+  quotedFee: number;
+
+  @Prop({
+    type: SchemaFactory.createForClass(OrderDropoffAddress),
+    required: true,
+  })
+  dropoff: OrderDropoffAddress;
+
+  @Prop({ required: true })
+  recipientName: string;
+
+  /** E.164 (+5521999999999). */
+  @Prop({ required: true })
+  recipientPhone: string;
+
+  @Prop()
+  instructions?: string;
+
+  @Prop()
+  uberDeliveryId?: string;
+
+  @Prop({ type: String, enum: UBER_DELIVERY_STATUSES })
+  status?: UberDeliveryStatus;
+
+  /** Valor que a Uber cobrou da loja na corrida solicitada. */
+  @Prop({ min: 0 })
+  fee?: number;
+
+  @Prop()
+  trackingUrl?: string;
+
+  @Prop()
+  pickupEta?: Date;
+
+  @Prop()
+  dropoffEta?: Date;
+
+  @Prop({ type: SchemaFactory.createForClass(OrderCourier) })
+  courier?: OrderCourier;
+
+  @Prop()
+  requestedAt?: Date;
+
+  @Prop({ type: Types.ObjectId, ref: 'User' })
+  requestedBy?: Types.ObjectId;
+
+  @Prop()
+  requestedByName?: string;
+
+  /** Motivo do cancelamento/devolucao informado pela Uber. */
+  @Prop()
+  failureReason?: string;
+
+  @Prop({
+    type: [SchemaFactory.createForClass(OrderDeliveryEvent)],
+    default: [],
+  })
+  events: OrderDeliveryEvent[];
 }
 
 export {
@@ -178,6 +403,10 @@ export {
   OrderStatusEvent,
   OrderDiscount,
   OrderRequestedPayment,
+  OrderDelivery,
+  OrderDropoffAddress,
+  OrderCourier,
+  OrderInfinitePay,
 };
 
 @Schema({ timestamps: true })
@@ -203,6 +432,22 @@ export class Order {
   @Prop({ type: OrderRequestedPayment })
   requestedPayment?: OrderRequestedPayment;
 
+  /** Entrega pela Uber Direct (so pedidos do cardapio com a loja em modo Uber). */
+  @Prop({ type: SchemaFactory.createForClass(OrderDelivery) })
+  delivery?: OrderDelivery;
+
+  /** Pagamento online pela InfinitePay (substitui o Pix estatico quando a loja ativa). */
+  @Prop({ type: SchemaFactory.createForClass(OrderInfinitePay) })
+  infinitePay?: OrderInfinitePay;
+
+  /** Trava curta do despacho da Uber (dois cliques nao pedem dois entregadores). */
+  @Prop()
+  dispatchLockedAt?: Date;
+
+  /** Cliente tocou "Já paguei" no cardapio — aviso, nao comprovante. */
+  @Prop()
+  paymentClaimedAt?: Date;
+
   @Prop({ type: Types.ObjectId, ref: 'Customer', required: true })
   customerId: Types.ObjectId;
 
@@ -213,6 +458,10 @@ export class Order {
 
   @Prop()
   customerPhone?: string;
+
+  /** Opcional (cardapio): a InfinitePay usa no checkout. */
+  @Prop()
+  customerEmail?: string;
 
   @Prop()
   customerAddress?: string;
@@ -292,6 +541,21 @@ export class Order {
 }
 
 export const OrderSchema = SchemaFactory.createForClass(Order);
+
+// Webhook da Uber chega so com o id da corrida.
+OrderSchema.index(
+  { 'delivery.uberDeliveryId': 1 },
+  {
+    unique: true,
+    partialFilterExpression: { 'delivery.uberDeliveryId': { $type: 'string' } },
+  },
+);
+
+// Webhook da InfinitePay chega so com o order_nsu (nosso UUID, nao adivinhavel).
+OrderSchema.index(
+  { 'infinitePay.orderNsu': 1 },
+  { partialFilterExpression: { 'infinitePay.orderNsu': { $type: 'string' } } },
+);
 
 OrderSchema.index({ businessId: 1, code: 1 }, { unique: true });
 OrderSchema.index({ businessId: 1, deliveryAt: 1 });

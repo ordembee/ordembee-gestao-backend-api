@@ -1,9 +1,9 @@
 import {
   availabilityLevel,
-  buildLiveProducts,
   buildMenuSnapshot,
   isProductAvailable,
   snapshotContentHash,
+  MenuSourceCategoryOrder,
   MenuSourceItem,
   MenuSourceProduct,
   resolveOptionGroups,
@@ -21,9 +21,12 @@ const store = {
   timezone: 'America/Sao_Paulo',
   deliveryFee: 5,
   deliveryEnabled: true,
+  deliveryProvider: 'PROPRIA' as const,
   pickupEnabled: true,
   openingHours: {},
   instagram: '',
+  highlightLabel: '',
+  highlightTitle: '',
   themeColor: null,
   acceptedPayments: ['PIX'],
 };
@@ -34,26 +37,28 @@ const product = (over: Partial<MenuSourceProduct> = {}): MenuSourceProduct => ({
   categoryId: 'cat-bolos',
   isActive: true,
   stock: -1,
-  prices: { deliveryProprio: { value: 10, active: true } },
+  prices: { ordemBee: { value: 10, active: true } },
   ...over,
 });
 
-/** Por padrao todo produto esta ativo no cardapio (ordem 0); `items` sobrescreve por id. */
+/** Por padrao todo produto esta ativo no cardapio; `items` sobrescreve por id. */
 const build = (
   products: MenuSourceProduct[],
   items: Record<string, Partial<MenuSourceItem>> = {},
+  categoryOrder: MenuSourceCategoryOrder[] = [],
 ) =>
   buildMenuSnapshot({
     store,
     categories: [
       { _id: 'cat-bolos', name: 'Bolos', icon: 'cake', color: '#f00' },
       { _id: 'cat-doces', name: 'Doces' },
+      { _id: 'cat-bebidas', name: 'Bebidas' },
     ],
+    categoryOrder,
     products,
     items: products.map((p) => ({
       productId: p._id,
       active: true,
-      order: 0,
       ...items[String(p._id)],
     })),
     version: 3,
@@ -69,11 +74,11 @@ describe('buildMenuSnapshot', () => {
         product({ _id: 'inativo', isActive: false }),
         product({
           _id: 'canal-off',
-          prices: { deliveryProprio: { value: 10, active: false } },
+          prices: { ordemBee: { value: 10, active: false } },
         }),
         product({
           _id: 'sem-preco',
-          prices: { deliveryProprio: { value: 0, active: true } },
+          prices: { ordemBee: { value: 0, active: true } },
         }),
       ],
       { oculto: { active: false } },
@@ -82,34 +87,34 @@ describe('buildMenuSnapshot', () => {
     expect(ids).toEqual(['ok']);
   });
 
-  it('preço: Delivery próprio ativo, senão o de Caixa; sem nenhum, fica fora', () => {
+  it('preço: OrdemBee ativo, senão o de Caixa; sem nenhum, fica fora', () => {
     const snap = build([
       product({
-        _id: 'delivery',
+        _id: 'ordembee',
         prices: {
           caixa: { value: 8 },
-          deliveryProprio: { value: 10, active: true },
+          ordemBee: { value: 10, active: true },
         },
       }),
       product({
         _id: 'caixa',
         prices: {
           caixa: { value: 8 },
-          deliveryProprio: { value: 10, active: false },
+          ordemBee: { value: 10, active: false },
         },
       }),
       product({
         _id: 'nada',
         prices: {
           caixa: { value: 0 },
-          deliveryProprio: { value: 0, active: false },
+          ordemBee: { value: 0, active: false },
         },
       }),
     ]);
     const prices = Object.fromEntries(
       snap.categories.flatMap((c) => c.products.map((p) => [p.id, p.price])),
     );
-    expect(prices).toEqual({ delivery: 10, caixa: 8 });
+    expect(prices).toEqual({ ordembee: 10, caixa: 8 });
   });
 
   it('não vaza custo, estoque nem precificação', () => {
@@ -127,7 +132,6 @@ describe('buildMenuSnapshot', () => {
         'name',
         'optionGroups',
         'price',
-        'tag',
       ].sort(),
     );
   });
@@ -150,32 +154,45 @@ describe('buildMenuSnapshot', () => {
     });
   });
 
-  it('agrupa por categoria, ordena pela ordem do cardápio/nome e manda "Outros" por último', () => {
-    const snap = build(
-      [
-        product({ _id: 'b', name: 'B' }),
-        product({ _id: 'a', name: 'A' }),
-        product({ _id: 'c', name: 'C' }),
-        product({ _id: 'solto', categoryId: undefined }),
-        product({ _id: 'doce', categoryId: 'cat-doces' }),
-      ],
-      {
-        b: { order: 2 },
-        a: { order: 2 },
-        c: { order: 1 },
-        solto: { order: -5 },
-        doce: { order: 5 },
-      },
-    );
+  it('agrupa por categoria, produtos por nome e manda "Outros" por último', () => {
+    const snap = build([
+      product({ _id: 'b', name: 'B' }),
+      product({ _id: 'a', name: 'A' }),
+      product({ _id: 'c', name: 'C' }),
+      product({ _id: 'solto', categoryId: undefined }),
+      product({ _id: 'doce', categoryId: 'cat-doces' }),
+    ]);
     expect(snap.categories.map((c) => c.name)).toEqual([
       'Bolos',
       'Doces',
       'Outros',
     ]);
     expect(snap.categories[0].products.map((p) => p.id)).toEqual([
-      'c',
       'a',
       'b',
+      'c',
+    ]);
+  });
+
+  it('categorias seguem a ordem do cardápio; sem posição vêm depois, por nome', () => {
+    const snap = build(
+      [
+        product({ _id: 'bolo', categoryId: 'cat-bolos' }),
+        product({ _id: 'doce', categoryId: 'cat-doces' }),
+        product({ _id: 'suco', categoryId: 'cat-bebidas' }),
+        product({ _id: 'solto', categoryId: undefined }),
+      ],
+      {},
+      [
+        { categoryId: 'cat-doces', order: 0 },
+        { categoryId: 'cat-bebidas', order: 1 },
+      ],
+    );
+    expect(snap.categories.map((c) => c.name)).toEqual([
+      'Doces',
+      'Bebidas',
+      'Bolos',
+      'Outros',
     ]);
   });
 
@@ -296,7 +313,6 @@ describe('complementos — resolveOptionGroups', () => {
         {
           productId: 'p1',
           active: true,
-          order: 0,
           optionGroupIds: ['g-bebida'],
         },
       ],
@@ -339,28 +355,29 @@ describe('disponibilidade (nunca o número)', () => {
     expect(isProductAvailable(combo)).toBe(true);
   });
 
-  it('ao vivo só leva disponibilidade, descrição e foto de quem está no cardápio', () => {
-    const on = product({ _id: 'a', stock: 0, description: 'Novo texto', imageUrl: 'https://x/y.webp' });
-    const off = product({ _id: 'b' });
-    const live = buildLiveProducts({
-      products: [on, off],
-      items: [
-        { productId: 'a', active: true },
-        { productId: 'b', active: false },
-      ],
-    });
-    expect(Object.keys(live)).toEqual(['a']);
-    expect(live.a).toEqual({ availability: 'out', description: 'Novo texto', imageUrl: 'https://x/y.webp' });
-    expect(JSON.stringify(live)).not.toMatch(/price|name|stock/);
-  });
-
-  it('hash ignora descrição, foto e disponibilidade (vão ao ar sozinhas), mas não o preço', () => {
+  it('hash muda com descrição, foto, disponibilidade e preço (tudo só vai ao ar publicando)', () => {
     const base = build([product({ _id: 'a', description: 'x', stock: 5 })]);
-    const editedLive = build([product({ _id: 'a', description: 'y', imageUrl: 'https://z', stock: 0 })]);
-    const editedPrice = build([
-      product({ _id: 'a', description: 'x', stock: 5, prices: { deliveryProprio: { value: 11, active: true } } }),
-    ]);
-    expect(snapshotContentHash(editedLive)).toBe(snapshotContentHash(base));
-    expect(snapshotContentHash(editedPrice)).not.toBe(snapshotContentHash(base));
+    const edits = [
+      product({ _id: 'a', description: 'y', stock: 5 }),
+      product({ _id: 'a', description: 'x', imageUrl: 'https://z', stock: 5 }),
+      product({ _id: 'a', description: 'x', stock: 0 }),
+      product({
+        _id: 'a',
+        description: 'x',
+        stock: 5,
+        prices: { ordemBee: { value: 11, active: true } },
+      }),
+    ];
+    for (const edited of edits) {
+      expect(snapshotContentHash(build([edited]))).not.toBe(
+        snapshotContentHash(base),
+      );
+    }
+    // Vender sem esgotar não pede publicar (o snapshot só guarda "disponível").
+    expect(
+      snapshotContentHash(
+        build([product({ _id: 'a', description: 'x', stock: 4 })]),
+      ),
+    ).toBe(snapshotContentHash(base));
   });
 });

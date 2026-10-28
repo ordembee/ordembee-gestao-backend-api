@@ -49,7 +49,8 @@ export class IngredientsService {
    * "sempre em tempo real" usado no resto do módulo.
    */
   async ensureOperationalCostIngredient(businessId: string): Promise<void> {
-    const { total } = await this.expensesService.getCurrentMonthOperationalCost(businessId);
+    const { total } =
+      await this.expensesService.getCurrentMonthOperationalCost(businessId);
     await this.ingredientModel.updateOne(
       {
         businessId: new Types.ObjectId(businessId),
@@ -267,7 +268,10 @@ export class IngredientsService {
         update.quantityPurchased = dto.quantityPurchased;
       if (dto.purchasePrice !== undefined)
         update.purchasePrice = dto.purchasePrice;
-      if (dto.quantityPurchased !== undefined || dto.purchasePrice !== undefined) {
+      if (
+        dto.quantityPurchased !== undefined ||
+        dto.purchasePrice !== undefined
+      ) {
         update.priceUpdatedAt = new Date();
       }
     } else {
@@ -301,7 +305,10 @@ export class IngredientsService {
     const bizObj = new Types.ObjectId(businessId);
     const idObj = new Types.ObjectId(id);
 
-    const target = await this.ingredientModel.findOne({ _id: idObj, businessId: bizObj });
+    const target = await this.ingredientModel.findOne({
+      _id: idObj,
+      businessId: bizObj,
+    });
     if (!target) {
       throw new NotFoundException('Ingrediente não encontrado');
     }

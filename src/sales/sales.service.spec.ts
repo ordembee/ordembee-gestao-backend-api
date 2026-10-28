@@ -26,7 +26,13 @@ describe('SalesService.resolveCostPrices', () => {
       {
         prepareForDocument: jest
           .fn()
-          .mockResolvedValue({ tags: [], discount: null, added: [], removed: [], existing: [] }),
+          .mockResolvedValue({
+            tags: [],
+            discount: null,
+            added: [],
+            removed: [],
+            existing: [],
+          }),
         commitUsage: jest.fn().mockResolvedValue(undefined),
         releaseUsage: jest.fn().mockResolvedValue(undefined),
       } as any,
@@ -37,13 +43,9 @@ describe('SalesService.resolveCostPrices', () => {
   it('uses the live custoFinal for a product linked to a pricing', async () => {
     const pricingId = new Types.ObjectId();
     const productId = new Types.ObjectId();
-    const { service } = buildService([
-      { _id: pricingId, custoFinal: 28.66 },
-    ]);
+    const { service } = buildService([{ _id: pricingId, custoFinal: 28.66 }]);
 
-    const products = [
-      { _id: productId, pricingId, costPrice: 0 } as any,
-    ];
+    const products = [{ _id: productId, pricingId, costPrice: 0 } as any];
 
     const result = await (service as any).resolveCostPrices('biz1', products);
     expect(result.get(String(productId))).toBe(28.66);
@@ -65,9 +67,7 @@ describe('SalesService.resolveCostPrices', () => {
     // findManyByIds só retorna precificações ativas — simula não achar nada.
     const { service } = buildService([]);
 
-    const products = [
-      { _id: productId, pricingId, costPrice: 7 } as any,
-    ];
+    const products = [{ _id: productId, pricingId, costPrice: 7 } as any];
 
     const result = await (service as any).resolveCostPrices('biz1', products);
     expect(result.get(String(productId))).toBe(7);
@@ -78,9 +78,7 @@ describe('SalesService.resolveCostPrices', () => {
     const productId = new Types.ObjectId();
     const { service } = buildService([{ _id: pricingId, custoFinal: null }]);
 
-    const products = [
-      { _id: productId, pricingId, costPrice: 9.9 } as any,
-    ];
+    const products = [{ _id: productId, pricingId, costPrice: 9.9 } as any];
 
     const result = await (service as any).resolveCostPrices('biz1', products);
     expect(result.get(String(productId))).toBe(9.9);
@@ -105,7 +103,13 @@ describe('SalesService.create — venda fiado exige cliente', () => {
       {
         prepareForDocument: jest
           .fn()
-          .mockResolvedValue({ tags: [], discount: null, added: [], removed: [], existing: [] }),
+          .mockResolvedValue({
+            tags: [],
+            discount: null,
+            added: [],
+            removed: [],
+            existing: [],
+          }),
         commitUsage: jest.fn().mockResolvedValue(undefined),
         releaseUsage: jest.fn().mockResolvedValue(undefined),
       } as any,
@@ -130,7 +134,9 @@ describe('SalesService.settleDebt', () => {
   function buildService() {
     const user = { _id: new Types.ObjectId() };
     const userModel = {
-      findOne: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue(user) }),
+      findOne: jest
+        .fn()
+        .mockReturnValue({ exec: jest.fn().mockResolvedValue(user) }),
     } as any;
     const saleModel = {
       findOneAndUpdate: jest.fn(),
@@ -146,7 +152,13 @@ describe('SalesService.settleDebt', () => {
       {
         prepareForDocument: jest
           .fn()
-          .mockResolvedValue({ tags: [], discount: null, added: [], removed: [], existing: [] }),
+          .mockResolvedValue({
+            tags: [],
+            discount: null,
+            added: [],
+            removed: [],
+            existing: [],
+          }),
         commitUsage: jest.fn().mockResolvedValue(undefined),
         releaseUsage: jest.fn().mockResolvedValue(undefined),
       } as any,
@@ -170,7 +182,10 @@ describe('SalesService.settleDebt', () => {
       debtSettled: false,
       'payments.method': PaymentMethod.FIADO,
     });
-    expect(update).toMatchObject({ debtSettled: true, debtSettledBy: user._id });
+    expect(update).toMatchObject({
+      debtSettled: true,
+      debtSettledBy: user._id,
+    });
   });
 
   it('lança NotFoundException quando a venda não existe ou já foi quitada', async () => {

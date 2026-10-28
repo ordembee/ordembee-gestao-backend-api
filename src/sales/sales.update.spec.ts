@@ -91,17 +91,25 @@ describe('SalesService - update() method', () => {
         },
         {
           provide: BusinessService,
-          useValue: { getTimezone: jest.fn().mockResolvedValue('America/Sao_Paulo') },
+          useValue: {
+            getTimezone: jest.fn().mockResolvedValue('America/Sao_Paulo'),
+          },
         },
         {
           provide: CampaignsService,
           useValue: {
-        prepareForDocument: jest
-          .fn()
-          .mockResolvedValue({ tags: [], discount: null, added: [], removed: [], existing: [] }),
-        commitUsage: jest.fn().mockResolvedValue(undefined),
-        releaseUsage: jest.fn().mockResolvedValue(undefined),
-      },
+            prepareForDocument: jest
+              .fn()
+              .mockResolvedValue({
+                tags: [],
+                discount: null,
+                added: [],
+                removed: [],
+                existing: [],
+              }),
+            commitUsage: jest.fn().mockResolvedValue(undefined),
+            releaseUsage: jest.fn().mockResolvedValue(undefined),
+          },
         },
       ],
     }).compile();
@@ -110,7 +118,8 @@ describe('SalesService - update() method', () => {
     (module.get(SalesService) as any).saleModel = mockSaleModel;
     (module.get(SalesService) as any).userModel = mockUserModel;
     (module.get(SalesService) as any).productModel = mockProductModel;
-    (module.get(SalesService) as any).stockMovementsService = mockStockMovementsService;
+    (module.get(SalesService) as any).stockMovementsService =
+      mockStockMovementsService;
     (module.get(SalesService) as any).pricingsService = mockPricingsService;
 
     service = module.get<SalesService>(SalesService);
@@ -121,7 +130,13 @@ describe('SalesService - update() method', () => {
       mockSaleModel.findOne.mockReturnValueOnce(query(null));
 
       await expect(
-        service.update(mockSaleId, mockBusinessId, mockFirebaseUid, mockUserId, {}),
+        service.update(
+          mockSaleId,
+          mockBusinessId,
+          mockFirebaseUid,
+          mockUserId,
+          {},
+        ),
       ).rejects.toThrow(NotFoundException);
 
       expect(mockSaleModel.findOne).toHaveBeenCalledWith(
@@ -144,7 +159,13 @@ describe('SalesService - update() method', () => {
       mockSaleModel.findOne.mockReturnValueOnce(query(cancelledSale));
 
       await expect(
-        service.update(mockSaleId, mockBusinessId, mockFirebaseUid, mockUserId, {}),
+        service.update(
+          mockSaleId,
+          mockBusinessId,
+          mockFirebaseUid,
+          mockUserId,
+          {},
+        ),
       ).rejects.toThrow(
         new BadRequestException('Não é possível editar uma venda cancelada'),
       );
@@ -165,9 +186,15 @@ describe('SalesService - update() method', () => {
       mockSaleModel.findOne.mockReturnValueOnce(query(sale));
 
       await expect(
-        service.update(mockSaleId, mockBusinessId, mockFirebaseUid, mockUserId, {
-          createdAt: 'data-invalida',
-        }),
+        service.update(
+          mockSaleId,
+          mockBusinessId,
+          mockFirebaseUid,
+          mockUserId,
+          {
+            createdAt: 'data-invalida',
+          },
+        ),
       ).rejects.toThrow(new BadRequestException('Data inválida'));
     });
 
@@ -187,9 +214,15 @@ describe('SalesService - update() method', () => {
       futureDate.setFullYear(futureDate.getFullYear() + 1);
 
       await expect(
-        service.update(mockSaleId, mockBusinessId, mockFirebaseUid, mockUserId, {
-          createdAt: futureDate.toISOString(),
-        }),
+        service.update(
+          mockSaleId,
+          mockBusinessId,
+          mockFirebaseUid,
+          mockUserId,
+          {
+            createdAt: futureDate.toISOString(),
+          },
+        ),
       ).rejects.toThrow(
         new BadRequestException('A data da venda não pode ser no futuro'),
       );
@@ -233,16 +266,22 @@ describe('SalesService - update() method', () => {
 
       // Tenta atualizar com pagamento incorreto
       await expect(
-        service.update(mockSaleId, mockBusinessId, mockFirebaseUid, mockUserId, {
-          items: [
-            {
-              productId: mockProductId,
-              unitPrice: 30.0,
-              quantity: 2, // novo total: 60.00
-            },
-          ],
-          payments: [{ method: 'DINHEIRO', amount: 51.8 }], // ainda 51.80
-        }),
+        service.update(
+          mockSaleId,
+          mockBusinessId,
+          mockFirebaseUid,
+          mockUserId,
+          {
+            items: [
+              {
+                productId: mockProductId,
+                unitPrice: 30.0,
+                quantity: 2, // novo total: 60.00
+              },
+            ],
+            payments: [{ method: 'DINHEIRO', amount: 51.8 }], // ainda 51.80
+          },
+        ),
       ).rejects.toThrow(BadRequestException);
     });
 
@@ -290,16 +329,22 @@ describe('SalesService - update() method', () => {
       );
 
       // Calcula novo total corretamente: 30 * 2 = 60
-      await service.update(mockSaleId, mockBusinessId, mockFirebaseUid, mockUserId, {
-        items: [
-          {
-            productId: mockProductId.toString(),
-            unitPrice: 30.0,
-            quantity: 2,
-          },
-        ],
-        payments: [{ method: 'DINHEIRO', amount: 60.0 }],
-      });
+      await service.update(
+        mockSaleId,
+        mockBusinessId,
+        mockFirebaseUid,
+        mockUserId,
+        {
+          items: [
+            {
+              productId: mockProductId.toString(),
+              unitPrice: 30.0,
+              quantity: 2,
+            },
+          ],
+          payments: [{ method: 'DINHEIRO', amount: 60.0 }],
+        },
+      );
 
       // Espera que findByIdAndUpdate tenha sido chamado
       expect(mockSaleModel.findByIdAndUpdate).toHaveBeenCalled();
@@ -355,16 +400,22 @@ describe('SalesService - update() method', () => {
       mockStockMovementsService.recordSaleMovement.mockResolvedValueOnce(null);
 
       // Nova quantidade: 5 (delta = +3)
-      await service.update(mockSaleId, mockBusinessId, mockFirebaseUid, mockUserId, {
-        items: [
-          {
-            productId: mockProductId.toString(),
-            unitPrice: 25.9,
-            quantity: 5,
-          },
-        ],
-        payments: [{ method: 'DINHEIRO', amount: 129.5 }],
-      });
+      await service.update(
+        mockSaleId,
+        mockBusinessId,
+        mockFirebaseUid,
+        mockUserId,
+        {
+          items: [
+            {
+              productId: mockProductId.toString(),
+              unitPrice: 25.9,
+              quantity: 5,
+            },
+          ],
+          payments: [{ method: 'DINHEIRO', amount: 129.5 }],
+        },
+      );
 
       // Verifica se StockMovement foi registrado
       expect(mockStockMovementsService.recordSaleMovement).toHaveBeenCalledWith(

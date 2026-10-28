@@ -28,7 +28,11 @@ export class Expense {
   @Prop({ required: true, min: 0 })
   amount: number;
 
-  @Prop({ type: String, enum: ExpenseCategory, default: ExpenseCategory.OUTROS })
+  @Prop({
+    type: String,
+    enum: ExpenseCategory,
+    default: ExpenseCategory.OUTROS,
+  })
   category: ExpenseCategory;
 
   @Prop({ type: String, enum: ExpenseType, default: ExpenseType.FIXO })

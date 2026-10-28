@@ -30,7 +30,10 @@ export class BusinessController {
 
   @Get('effective-permissions')
   getEffectivePermissions(@CurrentUser() user: any) {
-    return this.businessService.getEffectivePermissions(user.businessId, user.role);
+    return this.businessService.getEffectivePermissions(
+      user.businessId,
+      user.role,
+    );
   }
 
   @Patch('permissions')

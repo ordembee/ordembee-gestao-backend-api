@@ -24,13 +24,53 @@ const lean = (value: unknown) => ({
   select: () => ({ lean: () => ({ exec: () => Promise.resolve(value) }) }),
 });
 
+/**
+ * Os cenarios descrevem a loja num objeto so (`menu` achatado, como a tela
+ * pensa). Aqui ele vira o que fica no banco: MenuOnline + Business.config.
+ */
+function stored(business: any) {
+  if (!business) return { menu: null, business: null };
+  const m = business.menu ?? {};
+  return {
+    business: {
+      _id: business._id,
+      timezone: business.timezone,
+      config: { pix: m.pix, infinitepay: m.infinitepay },
+    },
+    menu: {
+      businessId: business._id,
+      enabled: m.enabled,
+      items: m.items,
+      optionGroups: m.optionGroups,
+      store: {
+        acceptedPayments: m.acceptedPayments,
+        openingHours: m.openingHours,
+        delivery: {
+          deliveryProvider: m.deliveryProvider,
+          deliveryFee: m.deliveryFee,
+          deliveryEnabled: m.deliveryEnabled,
+          pickupEnabled: m.pickupEnabled,
+        },
+      },
+    },
+  };
+}
+
 function setup(
   over: {
     business?: any;
     products?: any[];
     customer?: any;
     lastHour?: number;
-    existing?: { code: number; total: number } | null;
+    existing?: {
+      code: number;
+      total: number;
+      prepaid?: boolean;
+      checkoutUrl?: string;
+    } | null;
+    checkoutError?: Error;
+    quoteError?: Error;
+    quoteFee?: number;
   } = {},
 ) {
   const business =
@@ -44,8 +84,8 @@ function setup(
             pickupEnabled: true,
             openingHours: { '5': ['11:00', '23:00'] },
             items: [
-              { productId: bolo, active: true, order: 0 },
-              { productId: torta, active: true, order: 1 },
+              { productId: bolo, active: true },
+              { productId: torta, active: true },
             ],
           },
         }
@@ -56,14 +96,14 @@ function setup(
       name: 'Bolo',
       isActive: true,
       stock: -1,
-      prices: { deliveryProprio: { value: 30, active: true } },
+      prices: { ordemBee: { value: 30, active: true } },
     },
     {
       _id: torta,
       name: 'Torta',
       isActive: true,
       stock: 0,
-      prices: { deliveryProprio: { value: 50, active: true } },
+      prices: { ordemBee: { value: 50, active: true } },
     },
   ];
   const customerModel = {
@@ -77,7 +117,9 @@ function setup(
   };
   const ordersService = {
     findMenuOrderByRef: jest.fn(async () => over.existing ?? null),
-    countMenuOrdersSince: jest.fn(async (_businessId: string, _since: Date) => over.lastHour ?? 0),
+    countMenuOrdersSince: jest.fn(
+      async (_businessId: string, _since: Date) => over.lastHour ?? 0,
+    ),
     createFromMenu: jest.fn(async (input: any) => ({
       code: 42,
       total:
@@ -87,13 +129,34 @@ function setup(
         ) + input.deliveryFee,
     })),
   };
+  const uberDirect = {
+    acceptMenuQuote: jest.fn(async (_b: unknown, quoteId: string) => {
+      if (over.quoteError) throw over.quoteError;
+      return { quoteId, fee: over.quoteFee ?? 12.5 };
+    }),
+  };
+  const infinitePay = {
+    ensureCheckout: jest.fn(async () => {
+      if (over.checkoutError) throw over.checkoutError;
+      return { checkoutUrl: 'https://checkout.infinitepay.io/loja/abc' };
+    }),
+  };
+  const db = stored(business);
   const service = new MenuOrdersService(
-    { findOne: jest.fn(() => lean(business)) } as any,
+    { findById: jest.fn(() => lean(db.business)) } as any,
+    {
+      findOne: jest.fn(() => ({
+        ...lean(db.menu),
+        lean: () => ({ exec: () => Promise.resolve(db.menu) }),
+      })),
+    } as any,
     { find: jest.fn(() => lean(products)) } as any,
     customerModel as any,
     ordersService as any,
+    uberDirect as any,
+    infinitePay as any,
   );
-  return { service, ordersService, customerModel };
+  return { service, ordersService, customerModel, uberDirect, infinitePay };
 }
 
 const baseDto = (over: any = {}) => ({
@@ -124,7 +187,12 @@ describe('MenuOrdersService.create', () => {
     ]);
     expect(input.deliveryFee).toBe(6);
     expect(input.externalRef).toBe(baseDto().orderRef);
-    expect(result).toEqual({ code: 42, total: 66 });
+    expect(result).toEqual({
+      code: 42,
+      total: 66,
+      ref: baseDto().orderRef,
+      pix: undefined,
+    });
   });
 
   it('retirada não cobra taxa e não grava endereço', async () => {
@@ -198,7 +266,7 @@ describe('MenuOrdersService.create', () => {
         menu: {
           enabled: true,
           openingHours: { '5': ['11:00', '23:00'] },
-          items: [{ productId: bolo, active: false, order: 0 }],
+          items: [{ productId: bolo, active: false }],
         },
       },
     });
@@ -231,6 +299,16 @@ describe('MenuOrdersService.create', () => {
     expect(found.ordersService.createFromMenu.mock.calls[0][0].customer).toBe(
       existing,
     );
+    // Endereco de entrega: vale o do pedido mais recente, inclusive campo a campo.
+    expect(existing.address).toContain('Rua das Flores, 120');
+    expect(existing).toMatchObject({
+      addressDetails: {
+        street: 'Rua das Flores',
+        number: '120',
+        district: 'Centro',
+      },
+    });
+    expect(existing.save).toHaveBeenCalled();
 
     const fresh = setup();
     await fresh.service.create(baseDto() as any, NOW);
@@ -238,6 +316,7 @@ describe('MenuOrdersService.create', () => {
       expect.objectContaining({
         name: 'Maria Souza',
         phone: '(11) 98765-4321',
+        addressDetails: expect.objectContaining({ street: 'Rua das Flores' }),
       }),
     );
   });
@@ -357,9 +436,7 @@ describe('MenuOrdersService.create — complementos e pagamento', () => {
       enabled: true,
       deliveryFee: 6,
       openingHours: { '5': ['11:00', '23:00'] },
-      items: [
-        { productId: bolo, active: true, order: 0, optionGroupIds: [groupId] },
-      ],
+      items: [{ productId: bolo, active: true, optionGroupIds: [groupId] }],
       optionGroups: [
         {
           _id: groupId,
@@ -414,7 +491,7 @@ describe('MenuOrdersService.create — complementos e pagamento', () => {
           enabled: true,
           deliveryEnabled: false,
           openingHours: { '5': ['11:00', '23:00'] },
-          items: [{ productId: bolo, active: true, order: 0 }],
+          items: [{ productId: bolo, active: true }],
         },
       },
     });
@@ -444,7 +521,11 @@ describe('MenuOrdersService.create — estoque e abuso', () => {
       enabled: true,
       pickupEnabled: true,
       openingHours: { '5': ['11:00', '23:00'] },
-      items: ids.map((productId, order) => ({ productId, active: true, order })),
+      items: ids.map((productId, order) => ({
+        productId,
+        active: true,
+        order,
+      })),
     },
   });
   const doceProduct = (stock: number) => ({
@@ -452,10 +533,14 @@ describe('MenuOrdersService.create — estoque e abuso', () => {
     name: 'Doce',
     isActive: true,
     stock,
-    prices: { deliveryProprio: { value: 5, active: true } },
+    prices: { ordemBee: { value: 5, active: true } },
   });
   const pickup = (items: any[]) =>
-    baseDto({ fulfillment: OrderFulfillment.RETIRADA, address: undefined, items });
+    baseDto({
+      fulfillment: OrderFulfillment.RETIRADA,
+      address: undefined,
+      items,
+    });
 
   it('soma linhas repetidas do mesmo produto antes de comparar com o estoque', async () => {
     const { service, ordersService } = setup({
@@ -463,14 +548,19 @@ describe('MenuOrdersService.create — estoque e abuso', () => {
       products: [doceProduct(3)],
     });
     const line = { productId: doce.toString(), quantity: 2 };
-    await expect(service.create(pickup([line, line]), NOW)).rejects.toMatchObject({
+    await expect(
+      service.create(pickup([line, line]), NOW),
+    ).rejects.toMatchObject({
       response: { reason: 'INSUFFICIENT_STOCK' },
     });
     expect(ordersService.createFromMenu).not.toHaveBeenCalled();
   });
 
   it('recusa sem revelar quanto resta', async () => {
-    const { service } = setup({ business: businessWith([doce]), products: [doceProduct(2)] });
+    const { service } = setup({
+      business: businessWith([doce]),
+      products: [doceProduct(2)],
+    });
     const err = await service
       .create(pickup([{ productId: doce.toString(), quantity: 10 }]), NOW)
       .catch((e) => e);
@@ -484,7 +574,10 @@ describe('MenuOrdersService.create — estoque e abuso', () => {
       business: businessWith([doce]),
       products: [doceProduct(2)],
     });
-    await service.create(pickup([{ productId: doce.toString(), quantity: 2 }]), NOW);
+    await service.create(
+      pickup([{ productId: doce.toString(), quantity: 2 }]),
+      NOW,
+    );
     expect(ordersService.createFromMenu).toHaveBeenCalled();
   });
 
@@ -496,7 +589,7 @@ describe('MenuOrdersService.create — estoque e abuso', () => {
       isCombo: true,
       stock: -1,
       comboItems: [{ productId: doce, quantity: 2 }],
-      prices: { deliveryProprio: { value: 9, active: true } },
+      prices: { ordemBee: { value: 9, active: true } },
     };
     const { service } = setup({
       business: businessWith([kit]),
@@ -512,7 +605,10 @@ describe('MenuOrdersService.create — estoque e abuso', () => {
     const { service, ordersService } = setup({
       existing: { code: 7, total: 60 },
     });
-    await expect(service.create(baseDto(), NOW)).resolves.toEqual({ code: 7, total: 60 });
+    await expect(service.create(baseDto(), NOW)).resolves.toMatchObject({
+      code: 7,
+      total: 60,
+    });
     expect(ordersService.createFromMenu).not.toHaveBeenCalled();
   });
 
@@ -522,20 +618,29 @@ describe('MenuOrdersService.create — estoque e abuso', () => {
       { productId: bolo.toString(), quantity: 6 },
       { productId: bolo.toString(), quantity: 5 },
     ];
-    await expect(service.create(baseDto({ items }), NOW)).rejects.toThrow('10 unidades de cada item');
+    await expect(service.create(baseDto({ items }), NOW)).rejects.toThrow(
+      '10 unidades de cada item',
+    );
     expect(ordersService.createFromMenu).not.toHaveBeenCalled();
   });
 
   it('limita o pedido a 20 itens no total', async () => {
     const outros = [1, 2, 3].map(() => new Types.ObjectId());
-    const items = [bolo, ...outros].map((id) => ({ productId: id.toString(), quantity: 6 }));
+    const items = [bolo, ...outros].map((id) => ({
+      productId: id.toString(),
+      quantity: 6,
+    }));
     const { service, ordersService } = setup();
-    await expect(service.create(baseDto({ items }), NOW)).rejects.toThrow('no máximo 20 itens');
+    await expect(service.create(baseDto({ items }), NOW)).rejects.toThrow(
+      'no máximo 20 itens',
+    );
     expect(ordersService.createFromMenu).not.toHaveBeenCalled();
   });
 
   it('teto de pedidos do cardápio por loja na última hora', async () => {
-    const { service, ordersService } = setup({ lastHour: MAX_MENU_ORDERS_PER_STORE_PER_HOUR });
+    const { service, ordersService } = setup({
+      lastHour: MAX_MENU_ORDERS_PER_STORE_PER_HOUR,
+    });
     await expect(service.create(baseDto(), NOW)).rejects.toMatchObject({
       response: { reason: 'STORE_BUSY' },
     });
@@ -545,8 +650,229 @@ describe('MenuOrdersService.create — estoque e abuso', () => {
   });
 
   it('abaixo do teto segue normalmente', async () => {
-    const { service, ordersService } = setup({ lastHour: MAX_MENU_ORDERS_PER_STORE_PER_HOUR - 1 });
+    const { service, ordersService } = setup({
+      lastHour: MAX_MENU_ORDERS_PER_STORE_PER_HOUR - 1,
+    });
     await service.create(baseDto(), NOW);
     expect(ordersService.createFromMenu).toHaveBeenCalled();
+  });
+});
+
+describe('MenuOrdersService.create — entrega pela Uber', () => {
+  const uberBusiness = (over: any = {}) => ({
+    _id: new Types.ObjectId(),
+    timezone: 'America/Sao_Paulo',
+    menu: {
+      enabled: true,
+      deliveryFee: 6,
+      deliveryProvider: 'UBER',
+      acceptedPayments: ['DINHEIRO'],
+      pix: {
+        key: 'loja@exemplo.com',
+        merchantName: 'TIA NANA',
+        merchantCity: 'RIO DE JANEIRO',
+      },
+      pickupEnabled: true,
+      openingHours: { '5': ['11:00', '23:00'] },
+      items: [{ productId: bolo, active: true }],
+      ...over,
+    },
+  });
+  const uberDto = (over: any = {}) =>
+    baseDto({
+      address: {
+        cep: '20040-020',
+        street: 'Rua da Assembleia',
+        number: '10',
+        district: 'Centro',
+        city: 'Rio de Janeiro',
+        state: 'rj',
+        complement: 'Sala 203',
+        instructions: 'Entregar na portaria',
+      },
+      recipient: { name: 'João Pereira', phone: '21999999999' },
+      quoteId: 'dqt_abc',
+      ...over,
+    });
+
+  it('cobra o frete da cotação guardada, gera o Pix e marca pagamento antecipado', async () => {
+    const { service, ordersService, uberDirect } = setup({
+      business: uberBusiness(),
+      quoteFee: 14.9,
+    });
+    const result = await service.create(uberDto() as any, NOW);
+
+    expect(uberDirect.acceptMenuQuote.mock.calls[0][1]).toBe('dqt_abc');
+    const input = ordersService.createFromMenu.mock.calls[0][0];
+    expect(input.deliveryFee).toBe(14.9);
+    expect(input.requestedPayment).toMatchObject({
+      method: 'PIX',
+      prepaid: true,
+    });
+    expect(input.delivery).toMatchObject({
+      provider: 'UBER',
+      quoteId: 'dqt_abc',
+      quotedFee: 14.9,
+      recipientName: 'João Pereira',
+      recipientPhone: '+5521999999999',
+      instructions: 'Entregar na portaria',
+      dropoff: { state: 'RJ', city: 'Rio de Janeiro', complement: 'Sala 203' },
+    });
+    expect(result.pix?.amount).toBe(result.total);
+    expect(result.pix?.payload).toContain('br.gov.bcb.pix');
+    expect(result.pix?.payload).toContain('PEDIDO42');
+  });
+
+  it('ignora acceptedPayments da loja, mas exige Pix', async () => {
+    const { service } = setup({ business: uberBusiness() });
+    await expect(
+      service.create(
+        uberDto({ payment: { method: PaymentMethod.DINHEIRO } }) as any,
+        NOW,
+      ),
+    ).rejects.toThrow('paga antes, por Pix');
+  });
+
+  it('sem cotação recusa com QUOTE_REQUIRED', async () => {
+    const { service, ordersService } = setup({ business: uberBusiness() });
+    await expect(
+      service.create(uberDto({ quoteId: undefined }) as any, NOW),
+    ).rejects.toMatchObject({
+      response: { reason: 'QUOTE_REQUIRED' },
+    });
+    expect(ordersService.createFromMenu).not.toHaveBeenCalled();
+  });
+
+  it('destinatário precisa de nome e sobrenome', async () => {
+    const { service } = setup({ business: uberBusiness() });
+    await expect(
+      service.create(
+        uberDto({ recipient: { name: 'João', phone: '21999999999' } }) as any,
+        NOW,
+      ),
+    ).rejects.toThrow('nome e sobrenome');
+  });
+
+  it('sem cidade/UF não cota', async () => {
+    const { service } = setup({ business: uberBusiness() });
+    const dto = uberDto();
+    delete dto.address.city;
+    await expect(service.create(dto as any, NOW)).rejects.toThrow(
+      'cidade e estado',
+    );
+  });
+
+  it('cotação vencida sobe o erro para o cardápio recotar', async () => {
+    const expired = new ConflictException({ reason: 'QUOTE_EXPIRED' });
+    const { service, ordersService } = setup({
+      business: uberBusiness(),
+      quoteError: expired,
+    });
+    await expect(service.create(uberDto() as any, NOW)).rejects.toBe(expired);
+    expect(ordersService.createFromMenu).not.toHaveBeenCalled();
+  });
+
+  it('retirada continua com as formas da loja, sem Pix antecipado', async () => {
+    const { service, ordersService } = setup({
+      business: uberBusiness({ acceptedPayments: ['PIX'] }),
+    });
+    const result = await service.create(
+      baseDto({
+        fulfillment: OrderFulfillment.RETIRADA,
+        address: undefined,
+      }) as any,
+      NOW,
+    );
+    const input = ordersService.createFromMenu.mock.calls[0][0];
+    expect(input.delivery).toBeUndefined();
+    expect(input.requestedPayment.prepaid).toBeUndefined();
+    expect(result.pix).toBeUndefined();
+  });
+
+  it('retry idempotente devolve o mesmo Pix', async () => {
+    const { service } = setup({
+      business: uberBusiness(),
+      existing: { code: 9, total: 44.9, prepaid: true },
+    });
+    const result = await service.create(uberDto() as any, NOW);
+    expect(result).toMatchObject({ code: 9, total: 44.9 });
+    expect(result.pix?.payload).toContain('PEDIDO9');
+  });
+
+  describe('com a InfinitePay ativa', () => {
+    const online = () =>
+      uberBusiness({
+        pix: undefined,
+        infinitepay: { handle: 'loja', enabled: true },
+      });
+
+    it('cobra pelo link da InfinitePay, sem exigir chave Pix', async () => {
+      const { service, infinitePay, ordersService } = setup({
+        business: online(),
+      });
+      const result = await service.create(
+        uberDto({
+          redirectUrl: 'https://cardapio.app/?loja=tia-nana',
+          customer: {
+            name: 'Maria Souza',
+            phone: '11987654321',
+            email: 'maria@exemplo.com',
+          },
+        }) as any,
+        NOW,
+      );
+      expect(infinitePay.ensureCheckout).toHaveBeenCalledWith(
+        expect.any(String),
+        baseDto().orderRef,
+        'https://cardapio.app/?loja=tia-nana',
+      );
+      expect(result.checkoutUrl).toBe(
+        'https://checkout.infinitepay.io/loja/abc',
+      );
+      expect(result.pix).toBeUndefined();
+      expect(ordersService.createFromMenu.mock.calls[0][0].customerEmail).toBe(
+        'maria@exemplo.com',
+      );
+      expect(
+        ordersService.createFromMenu.mock.calls[0][0].requestedPayment.prepaid,
+      ).toBe(true);
+    });
+
+    it('link que falha não derruba o pedido: avisa que o link vem depois', async () => {
+      const { service } = setup({
+        business: online(),
+        checkoutError: new Error('InfinitePay fora'),
+      });
+      const result = await service.create(uberDto() as any, NOW);
+      expect(result).toMatchObject({ code: 42, onlinePayment: 'INFINITEPAY' });
+      expect(result.checkoutUrl).toBeUndefined();
+    });
+
+    it('integração desligada volta ao Pix estático', async () => {
+      const { service, infinitePay } = setup({
+        business: uberBusiness({
+          infinitepay: { handle: 'loja', enabled: false },
+        }),
+      });
+      const result = await service.create(uberDto() as any, NOW);
+      expect(infinitePay.ensureCheckout).not.toHaveBeenCalled();
+      expect(result.pix?.payload).toContain('PEDIDO42');
+    });
+
+    it('retry devolve o mesmo link', async () => {
+      const { service } = setup({
+        business: online(),
+        existing: {
+          code: 9,
+          total: 44.9,
+          prepaid: true,
+          checkoutUrl: 'https://checkout.infinitepay.io/loja/zzz',
+        },
+      });
+      const result = await service.create(uberDto() as any, NOW);
+      expect(result.checkoutUrl).toBe(
+        'https://checkout.infinitepay.io/loja/zzz',
+      );
+    });
   });
 });

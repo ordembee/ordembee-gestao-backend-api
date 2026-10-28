@@ -169,7 +169,15 @@ export class AuthService {
       name: dto.name,
       logoUrl: dto.logoUrl,
       businessType: dto.businessType,
-      city: dto.city,
+      city: dto.address?.city ?? dto.city,
+      phone: dto.phone?.trim() || undefined,
+      address: dto.address
+        ? {
+            ...dto.address,
+            state: dto.address.state.toUpperCase(),
+            complement: dto.address.complement?.trim() || undefined,
+          }
+        : undefined,
       currency: dto.currency || 'BRL',
       timezone: resolveTimeZone(dto.timezone),
     });

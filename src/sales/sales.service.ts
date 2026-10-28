@@ -21,9 +21,18 @@ import { Role } from '../common/enums/role.enum';
 import { PaymentMethod } from '../common/enums/payment-method.enum';
 import { SaleChannel } from '../common/enums/sale-channel.enum';
 import { BusinessService } from '../business/business.service';
-import { PreparedCampaigns, CampaignsService } from '../campaigns/campaigns.service';
-import { instantRangeFilter, zonedTodayRange } from '../common/date/timezone.util';
-import { normalizeCampaignName, roundMoney } from '../common/campaigns/campaign.util';
+import {
+  PreparedCampaigns,
+  CampaignsService,
+} from '../campaigns/campaigns.service';
+import {
+  instantRangeFilter,
+  zonedTodayRange,
+} from '../common/date/timezone.util';
+import {
+  normalizeCampaignName,
+  roundMoney,
+} from '../common/campaigns/campaign.util';
 
 @Injectable()
 export class SalesService {
@@ -55,14 +64,21 @@ export class SalesService {
     const pricingIds = products
       .filter((p) => p.pricingId)
       .map((p) => p.pricingId as Types.ObjectId);
-    const pricings = await this.pricingsService.findManyByIds(businessId, pricingIds);
+    const pricings = await this.pricingsService.findManyByIds(
+      businessId,
+      pricingIds,
+    );
     const byPricingId = new Map(pricings.map((pr) => [pr._id.toString(), pr]));
 
     const costByProductId = new Map<string, number>();
     for (const p of products) {
-      const linked = p.pricingId ? byPricingId.get(p.pricingId.toString()) : undefined;
+      const linked = p.pricingId
+        ? byPricingId.get(p.pricingId.toString())
+        : undefined;
       const cost =
-        linked && linked.custoFinal !== null ? linked.custoFinal : Number(p.costPrice ?? 0);
+        linked && linked.custoFinal !== null
+          ? linked.custoFinal
+          : Number(p.costPrice ?? 0);
       costByProductId.set(String(p._id), cost);
     }
     return costByProductId;
@@ -81,13 +97,9 @@ export class SalesService {
       throw new NotFoundException('Usuário não encontrado');
     }
 
-    const hasFiado = dto.payments.some(
-      (p) => p.method === PaymentMethod.FIADO,
-    );
+    const hasFiado = dto.payments.some((p) => p.method === PaymentMethod.FIADO);
     if (hasFiado && !dto.customerId) {
-      throw new BadRequestException(
-        'Cliente é obrigatório para venda fiado',
-      );
+      throw new BadRequestException('Cliente é obrigatório para venda fiado');
     }
 
     let customer: CustomerDocument | null = null;
@@ -291,6 +303,7 @@ export class SalesService {
     businessId: string;
     userId: Types.ObjectId;
     orderId: Types.ObjectId;
+    orderSource: 'INTERNO' | 'CARDAPIO';
     items: {
       productId: Types.ObjectId;
       productName: string;
@@ -331,6 +344,7 @@ export class SalesService {
       businessId: new Types.ObjectId(params.businessId),
       userId: params.userId,
       orderId: params.orderId,
+      orderSource: params.orderSource,
       tags: params.tags,
       totalProfit,
       notes: params.notes,
@@ -357,7 +371,8 @@ export class SalesService {
       campaign?: string;
     },
   ): Promise<{ data: SaleDocument[]; total: number; totalPages: number }> {
-    const { page, limit, status, dateFrom, dateTo, operatorId, campaign } = params;
+    const { page, limit, status, dateFrom, dateTo, operatorId, campaign } =
+      params;
     const filter: Record<string, unknown> = {
       businessId: new Types.ObjectId(businessId),
     };
@@ -612,9 +627,7 @@ export class SalesService {
       this.logger.warn(
         `Tentativa de quitar dívida inexistente ou já quitada: id=${id} | negócio: ${businessId}`,
       );
-      throw new NotFoundException(
-        'Venda não encontrada ou dívida já quitada',
-      );
+      throw new NotFoundException('Venda não encontrada ou dívida já quitada');
     }
 
     this.logger.log(`Dívida quitada: ${id} | negócio: ${businessId}`);
@@ -676,7 +689,8 @@ export class SalesService {
 
     // OWNER/GERENTE sem operador selecionado = fechamento consolidado de todos
     // os operadores. CAIXA nunca envia targetUserId — sempre restrito a si mesmo.
-    const isPrivileged = requesterRole === Role.OWNER || requesterRole === Role.GERENTE;
+    const isPrivileged =
+      requesterRole === Role.OWNER || requesterRole === Role.GERENTE;
     const aggregateAll = isPrivileged && !targetUserId;
 
     const resolvedUserId = aggregateAll
@@ -791,7 +805,10 @@ export class SalesService {
     return {
       operatorName: aggregateAll
         ? 'Todos os operadores'
-        : targetUser?.displayName || targetUser?.email || user.displayName || user.email,
+        : targetUser?.displayName ||
+          targetUser?.email ||
+          user.displayName ||
+          user.email,
       totalSales: summary.totalSales,
       totalItems: summary.totalItems,
       grandTotal: summary.grandTotal,
@@ -1005,9 +1022,7 @@ export class SalesService {
         throw new BadRequestException('Data inválida');
       }
       if (newDate > new Date()) {
-        throw new BadRequestException(
-          'A data da venda não pode ser no futuro',
-        );
+        throw new BadRequestException('A data da venda não pode ser no futuro');
       }
       newCreatedAt = newDate;
     }
@@ -1033,7 +1048,9 @@ export class SalesService {
     // ===== Processar atualização de itens =====
     if (dto.items && dto.items.length > 0) {
       // Buscar produtos para validação e cálculo de custos
-      const productIds = dto.items.map((item) => new Types.ObjectId(item.productId));
+      const productIds = dto.items.map(
+        (item) => new Types.ObjectId(item.productId),
+      );
       const products = await this.productModel
         .find({ _id: { $in: productIds } })
         .select('costPrice pricingId stock name isCombo comboItems')
@@ -1192,10 +1209,7 @@ export class SalesService {
 
     // ===== Processar atualização de pagamentos =====
     if (dto.payments && dto.payments.length > 0) {
-      const paymentsSum = dto.payments.reduce(
-        (sum, p) => sum + p.amount,
-        0,
-      );
+      const paymentsSum = dto.payments.reduce((sum, p) => sum + p.amount, 0);
 
       // Validar soma de pagamentos contra o novo total
       if (Math.abs(paymentsSum - sale.total) > 0.01) {

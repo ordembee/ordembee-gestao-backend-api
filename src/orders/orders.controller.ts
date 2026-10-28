@@ -8,6 +8,7 @@ import {
   Query,
 } from '@nestjs/common';
 import { OrdersService } from './orders.service';
+import { PanelCheckoutService } from './panel-checkout.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { Role } from '../common/enums/role.enum';
@@ -20,11 +21,32 @@ import { OrderStatus } from './schemas/order.schema';
 
 @Controller('orders')
 export class OrdersController {
-  constructor(private readonly ordersService: OrdersService) {}
+  constructor(
+    private readonly ordersService: OrdersService,
+    private readonly panelCheckout: PanelCheckoutService,
+  ) {}
 
   @Post()
-  create(@CurrentUser() user: any, @Body() dto: CreateOrderDto) {
-    return this.ordersService.create(user.uid, user.businessId, dto);
+  async create(@CurrentUser() user: any, @Body() dto: CreateOrderDto) {
+    const extras = await this.panelCheckout.prepare(user.businessId, dto);
+    const order = await this.ordersService.create(
+      user.uid,
+      user.businessId,
+      dto,
+      extras,
+    );
+    if (!extras.delivery && !extras.infinitePay) return order;
+    await this.panelCheckout.finish(order as any, user.businessId, extras);
+    return this.ordersService.findOne(
+      String((order as any)._id),
+      user.businessId,
+    );
+  }
+
+  /** O que o formulario pode oferecer: entrega Uber e/ou cobranca InfinitePay. */
+  @Get('checkout-options')
+  checkoutOptions(@CurrentUser() user: any) {
+    return this.panelCheckout.options(user.businessId);
   }
 
   @Get()
@@ -32,7 +54,8 @@ export class OrdersController {
     @CurrentUser() user: any,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
-    @Query('scope') scope?: 'all' | 'today' | 'deliveredToday' | 'open' | 'late',
+    @Query('scope')
+    scope?: 'all' | 'today' | 'deliveredToday' | 'open' | 'late',
     @Query('status') status?: string,
     @Query('campaign') campaign?: string,
     @Query('customerId') customerId?: string,

@@ -2,63 +2,94 @@ import { BadRequestException } from '@nestjs/common';
 import { Types } from 'mongoose';
 import { MenuService } from './menu.service';
 
-/** Service cru com mocks do que updateItem/reorderItems tocam. */
-function setup(
+const chain = (value: unknown) => ({
+  select: () => chain(value),
+  lean: () => chain(value),
+  exec: () => Promise.resolve(value),
+});
+
+/**
+ * Service cru: Business so com o que e do negocio, o cardapio (MenuOnline)
+ * num model a parte. `updateOne` do cardapio guarda o que foi gravado.
+ */
+function makeService(
   opts: {
-    items?: any[];
-    channel?: { value: number; active: boolean };
-    caixa?: number;
-    onMenu?: boolean;
+    business?: Record<string, unknown>;
+    menu?: Record<string, unknown> | null;
+    product?: any;
+    products?: any[];
+    categories?: any[];
+    storage?: any;
   } = {},
 ) {
-  const businessId = new Types.ObjectId();
-  const productId = new Types.ObjectId();
-  const product: any = {
-    _id: productId,
-    name: 'Bolo',
-    categoryId: undefined,
-    prices: {
-      caixa: { value: opts.caixa ?? 0, active: true },
-      deliveryProprio: opts.channel ?? { value: 0, active: false },
-    },
-    toObject: () => ({ ...product }),
+  const business = {
+    _id: new Types.ObjectId(),
+    name: 'Loja',
+    ...opts.business,
   };
-  const items = opts.onMenu
-    ? [{ productId, active: true, order: 0 }]
-    : (opts.items ?? []);
-  const business = { _id: businessId, name: 'Loja', menu: { items } };
-  const updateOne = jest.fn(() => ({ exec: () => Promise.resolve() }));
-  const businessModel = {
-    findById: () => ({
-      select: () => ({
-        lean: () => ({ exec: () => Promise.resolve(business) }),
-      }),
-    }),
-    updateOne,
+  const menuUpdate = jest.fn(() => ({ exec: () => Promise.resolve() }));
+  const menuModel = {
+    findOne: () => chain(opts.menu ?? null),
+    exists: jest.fn(() => chain(null)),
+    updateOne: menuUpdate,
   };
   const productModel = {
-    findOne: () => ({ exec: () => Promise.resolve(product) }),
-    countDocuments: jest.fn(() => ({ exec: () => Promise.resolve(1) })),
+    findOne: () => ({ exec: () => Promise.resolve(opts.product ?? null) }),
+    find: () => chain(opts.products ?? []),
+    countDocuments: jest.fn(() => chain(1)),
+  };
+  const categoryModel = {
+    find: () => chain(opts.categories ?? []),
+    countDocuments: jest.fn(() => chain(1)),
   };
   const service = new MenuService(
-    businessModel as any,
+    { findById: () => chain(business) } as any,
+    menuModel as any,
     productModel as any,
-    {} as any,
-    {} as any,
+    categoryModel as any,
+    (opts.storage ?? {}) as any,
   );
-  const savedItems = () =>
-    (updateOne.mock.calls.at(-1) as any[])[1].$set['menu.items'];
+  /** Ultimo `$set`/`$unset` gravado no cardapio. */
+  const lastWrite = () => (menuUpdate.mock.calls.at(-1) as any[])[1];
+  const saved = (key: string) => lastWrite().$set[key];
   return {
     service,
-    product,
-    productId,
-    businessId: businessId.toString(),
-    savedItems,
+    businessId: business._id.toString(),
+    business,
+    menuUpdate,
+    lastWrite,
+    saved,
     productModel,
+    categoryModel,
   };
 }
 
 describe('MenuService — itens do cardápio', () => {
+  function setup(
+    opts: {
+      items?: any[];
+      channel?: { value: number; active: boolean };
+      caixa?: number;
+    } = {},
+  ) {
+    const productId = new Types.ObjectId();
+    const product: any = {
+      _id: productId,
+      name: 'Bolo',
+      categoryId: undefined,
+      prices: {
+        caixa: { value: opts.caixa ?? 0, active: true },
+        ordemBee: opts.channel ?? { value: 0, active: false },
+      },
+      toObject: () => ({ ...product }),
+    };
+    const ctx = makeService({
+      menu: { items: opts.items ?? [] },
+      product,
+    });
+    return { ...ctx, productId };
+  }
+
   it('ligar produto sem nenhum preço cadastrado é recusado', async () => {
     const { service, businessId, productId } = setup();
     await expect(
@@ -67,25 +98,17 @@ describe('MenuService — itens do cardápio', () => {
   });
 
   it('sem Delivery próprio, usa o preço de Caixa cadastrado', async () => {
-    const { service, businessId, productId, savedItems } = setup({ caixa: 14 });
+    const { service, businessId, productId, saved } = setup({ caixa: 14 });
     const row = await service.updateItem(businessId, productId.toString(), {
       active: true,
-      tag: ' Mais pedido ',
     });
     expect(row).toMatchObject({
       active: true,
       price: 14,
       priceSource: 'caixa',
-      tag: 'Mais pedido',
     });
-    expect(savedItems()).toEqual([
-      expect.objectContaining({
-        productId,
-        active: true,
-        tag: 'Mais pedido',
-        order: 0,
-      }),
-    ]);
+    expect(row).not.toHaveProperty('tag');
+    expect(saved('items')).toEqual([{ productId, active: true }]);
   });
 
   it('Delivery próprio ativo tem prioridade sobre o Caixa', async () => {
@@ -96,77 +119,129 @@ describe('MenuService — itens do cardápio', () => {
     const row = await service.updateItem(businessId, productId.toString(), {
       active: true,
     });
-    expect(row).toMatchObject({ price: 16.9, priceSource: 'delivery' });
+    expect(row).toMatchObject({ price: 16.9, priceSource: 'ordembee' });
   });
 
-  it('desligar mantém selo e ordem guardados', async () => {
-    const { service, businessId, productId, savedItems } = setup({
-      caixa: 10,
-      onMenu: true,
+  it('desligar mantém os complementos guardados', async () => {
+    const groupId = new Types.ObjectId();
+    const productId = new Types.ObjectId();
+    const { service, businessId, saved } = makeService({
+      menu: {
+        items: [{ productId, active: true, optionGroupIds: [groupId] }],
+      },
+      product: {
+        _id: productId,
+        name: 'Bolo',
+        prices: { caixa: { value: 10, active: true } },
+        toObject() {
+          return { ...this };
+        },
+      },
     });
     await service.updateItem(businessId, productId.toString(), {
       active: false,
     });
-    expect(savedItems()[0]).toMatchObject({ active: false, order: 0 });
+    expect(saved('items')[0]).toMatchObject({
+      active: false,
+      optionGroupIds: [groupId],
+    });
   });
 
-  it('reordenar grava a posição de cada produto e mantém o estado', async () => {
-    const { service, businessId, productId, savedItems, productModel } = setup({
-      items: [],
+  it('lista na ordem das categorias do cardápio, produtos por nome', async () => {
+    const doces = new Types.ObjectId();
+    const bebidas = new Types.ObjectId();
+    const price = { caixa: { value: 5, active: true } };
+    const { service, businessId } = makeService({
+      menu: {
+        categories: [
+          { categoryId: doces, order: 0 },
+          { categoryId: bebidas, order: 1 },
+        ],
+      },
+      products: [
+        {
+          _id: new Types.ObjectId(),
+          name: 'Suco',
+          categoryId: bebidas,
+          prices: price,
+        },
+        { _id: new Types.ObjectId(), name: 'Sem categoria', prices: price },
+        {
+          _id: new Types.ObjectId(),
+          name: 'Brigadeiro',
+          categoryId: doces,
+          prices: price,
+        },
+        {
+          _id: new Types.ObjectId(),
+          name: 'Bolo',
+          categoryId: doces,
+          prices: price,
+        },
+      ],
+      categories: [
+        { _id: bebidas, name: 'Bebidas' },
+        { _id: doces, name: 'Doces' },
+      ],
     });
-    const other = new Types.ObjectId();
-    productModel.countDocuments.mockReturnValue({
-      exec: () => Promise.resolve(2),
-    });
-    await service.reorderItems(businessId, {
-      productIds: [other.toString(), productId.toString()],
+    const rows = await service.listItems(businessId);
+    expect(rows.map((r) => r.name)).toEqual([
+      'Bolo',
+      'Brigadeiro',
+      'Suco',
+      'Sem categoria',
+    ]);
+  });
+});
+
+describe('MenuService — ordem das categorias', () => {
+  it('grava a posição de cada categoria na ordem enviada', async () => {
+    const { service, businessId, saved, categoryModel } = makeService();
+    const [a, b] = [new Types.ObjectId(), new Types.ObjectId()];
+    categoryModel.countDocuments.mockReturnValue(chain(2));
+    await service.reorderCategories(businessId, {
+      categoryIds: [b.toString(), a.toString()],
     });
     expect(
-      savedItems().map((i: any) => [String(i.productId), i.order, i.active]),
+      saved('categories').map((c: any) => [String(c.categoryId), c.order]),
     ).toEqual([
-      [other.toString(), 0, false],
-      [productId.toString(), 1, false],
+      [b.toString(), 0],
+      [a.toString(), 1],
     ]);
   });
 
-  it('reordenar com produto de outro negócio é recusado', async () => {
-    const { service, businessId, productModel } = setup();
-    productModel.countDocuments.mockReturnValue({
-      exec: () => Promise.resolve(0),
-    });
+  it('categoria de outro negócio é recusada', async () => {
+    const { service, businessId, categoryModel } = makeService();
+    categoryModel.countDocuments.mockReturnValue(chain(0));
     await expect(
-      service.reorderItems(businessId, {
-        productIds: [new Types.ObjectId().toString()],
+      service.reorderCategories(businessId, {
+        categoryIds: [new Types.ObjectId().toString()],
       }),
     ).rejects.toThrow(BadRequestException);
+  });
+
+  it('categoria sem posição definida vem depois, por nome', async () => {
+    const [a, b, c] = [
+      new Types.ObjectId(),
+      new Types.ObjectId(),
+      new Types.ObjectId(),
+    ];
+    const { service, businessId } = makeService({
+      menu: { categories: [{ categoryId: c, order: 0 }] },
+      categories: [
+        { _id: b, name: 'Bebidas' },
+        { _id: a, name: 'Antepastos' },
+        { _id: c, name: 'Doces' },
+      ],
+    });
+    const rows = await service.listCategories(businessId);
+    expect(rows.map((r) => r.name)).toEqual(['Doces', 'Antepastos', 'Bebidas']);
   });
 });
 
 describe('MenuService — grupos de complementos', () => {
-  function groupSetup(groups: any[] = [], items: any[] = []) {
-    const updateOne = jest.fn(() => ({ exec: () => Promise.resolve() }));
-    const business = {
-      _id: new Types.ObjectId(),
-      name: 'Loja',
-      menu: { items, optionGroups: groups },
-    };
-    const service = new MenuService(
-      {
-        findById: () => ({
-          select: () => ({
-            lean: () => ({ exec: () => Promise.resolve(business) }),
-          }),
-        }),
-        updateOne,
-      } as any,
-      {} as any,
-      {} as any,
-      {} as any,
-    );
-    const saved = (key: string) =>
-      (updateOne.mock.calls.at(-1) as any[])[1].$set[key];
-    return { service, saved, businessId: business._id.toString() };
-  }
+  const groupSetup = (groups: any[] = [], items: any[] = []) =>
+    makeService({ menu: { items, optionGroups: groups } });
 
   it('cria grupo com ids novos para as opções', async () => {
     const { service, saved, businessId } = groupSetup();
@@ -187,7 +262,7 @@ describe('MenuService — grupos de complementos', () => {
       usedBy: 0,
     });
     expect(row.options.every((o) => /^[0-9a-f]{24}$/.test(o.id))).toBe(true);
-    expect(saved('menu.optionGroups')).toHaveLength(1);
+    expect(saved('optionGroups')).toHaveLength(1);
   });
 
   it('ao editar, mantém o id das opções que já eram do grupo', async () => {
@@ -240,16 +315,15 @@ describe('MenuService — grupos de complementos', () => {
         {
           productId: new Types.ObjectId(),
           active: true,
-          order: 0,
           optionGroupIds: [groupId, keep],
         },
       ],
     );
     await service.removeOptionGroup(businessId, groupId.toString());
-    expect(saved('menu.optionGroups').map((g: any) => String(g._id))).toEqual([
+    expect(saved('optionGroups').map((g: any) => String(g._id))).toEqual([
       keep.toString(),
     ]);
-    expect(saved('menu.items')[0].optionGroupIds.map(String)).toEqual([
+    expect(saved('items')[0].optionGroupIds.map(String)).toEqual([
       keep.toString(),
     ]);
   });
@@ -257,143 +331,120 @@ describe('MenuService — grupos de complementos', () => {
 
 describe('MenuService — logo e capa', () => {
   const BUCKET = 'https://storage.googleapis.com/bucket/';
-  function imageSetup(business: any) {
-    const updateOne = jest.fn(() => ({ exec: () => Promise.resolve() }));
-    const storage = {
-      uploadStoreImage: jest.fn(async (_b: string, kind: string) => ({
-        url: `${BUCKET}business/x/menu/${kind}-1.webp`,
-        path: `business/x/menu/${kind}-1.webp`,
-      })),
-      pathFromPublicUrl: (url?: string) =>
-        url?.startsWith(BUCKET) ? url.slice(BUCKET.length) : null,
-      deleteFile: jest.fn(async () => undefined),
-      publicUrl: (p: string) => BUCKET + p,
-    };
-    const service = new MenuService(
-      {
-        findById: () => ({
-          select: () => ({
-            lean: () => ({ exec: () => Promise.resolve(business) }),
-          }),
-        }),
-        updateOne,
-      } as any,
-      {
-        find: () => ({
-          select: () => ({ lean: () => ({ exec: () => Promise.resolve([]) }) }),
-        }),
-      } as any,
-      {
-        find: () => ({
-          select: () => ({ lean: () => ({ exec: () => Promise.resolve([]) }) }),
-        }),
-      } as any,
-      storage as any,
-    );
-    return { service, storage, updateOne };
-  }
+  const storage = () => ({
+    uploadStoreImage: jest.fn(async (_b: string, kind: string) => ({
+      url: `${BUCKET}business/x/menu/${kind}-1.webp`,
+      path: `business/x/menu/${kind}-1.webp`,
+    })),
+    pathFromPublicUrl: (url?: string) =>
+      url?.startsWith(BUCKET) ? url.slice(BUCKET.length) : null,
+    deleteFile: jest.fn(async () => undefined),
+    publicUrl: (p: string) => BUCKET + p,
+  });
   const file = { mimetype: 'image/png', buffer: Buffer.from('x') } as any;
 
-  it('logo nova vai para Business.logoUrl e apaga a anterior do nosso Storage', async () => {
-    const business = {
-      _id: new Types.ObjectId(),
-      name: 'Loja',
-      logoUrl: `${BUCKET}business/x/menu/logo-0.webp`,
-      menu: {},
-    };
-    const { service, storage, updateOne } = imageSetup(business);
-    await service.setStoreImage(String(business._id), 'logo', file);
-    expect((updateOne.mock.calls[0] as any[])[1]).toEqual({
-      $set: { logoUrl: `${BUCKET}business/x/menu/logo-1.webp` },
+  it('logo nova é do cardápio (store.images) e apaga a anterior do nosso Storage', async () => {
+    const st = storage();
+    const { service, businessId, lastWrite } = makeService({
+      menu: {
+        store: { images: { logoUrl: `${BUCKET}business/x/menu/logo-0.webp` } },
+      },
+      storage: st,
     });
-    expect(storage.deleteFile).toHaveBeenCalledWith(
-      'business/x/menu/logo-0.webp',
-    );
+    await service.setStoreImage(businessId, 'logo', file);
+    expect(lastWrite()).toEqual({
+      $set: {
+        'store.images.logoUrl': `${BUCKET}business/x/menu/logo-1.webp`,
+      },
+    });
+    expect(st.deleteFile).toHaveBeenCalledWith('business/x/menu/logo-0.webp');
   });
 
-  it('capa vai para menu.coverUrl e não apaga URL externa', async () => {
-    const business = {
-      _id: new Types.ObjectId(),
-      name: 'Loja',
-      menu: { coverUrl: 'https://outro-site.com/capa.jpg' },
-    };
-    const { service, storage, updateOne } = imageSetup(business);
-    await service.setStoreImage(String(business._id), 'cover', file);
-    expect((updateOne.mock.calls[0] as any[])[1]).toEqual({
-      $set: { 'menu.coverUrl': `${BUCKET}business/x/menu/cover-1.webp` },
+  it('não apaga a logo herdada que ainda é a do negócio', async () => {
+    const st = storage();
+    const shared = `${BUCKET}business/x/logo.webp`;
+    const { service, businessId } = makeService({
+      business: { logoUrl: shared },
+      menu: { store: { images: { logoUrl: shared } } },
+      storage: st,
     });
-    expect(storage.deleteFile).not.toHaveBeenCalled();
+    await service.setStoreImage(businessId, 'logo', file);
+    expect(st.deleteFile).not.toHaveBeenCalled();
+  });
+
+  it('capa vai para store.images.coverUrl e não apaga URL externa', async () => {
+    const st = storage();
+    const { service, businessId, lastWrite } = makeService({
+      menu: {
+        store: { images: { coverUrl: 'https://outro-site.com/capa.jpg' } },
+      },
+      storage: st,
+    });
+    await service.setStoreImage(businessId, 'cover', file);
+    expect(lastWrite()).toEqual({
+      $set: {
+        'store.images.coverUrl': `${BUCKET}business/x/menu/cover-1.webp`,
+      },
+    });
+    expect(st.deleteFile).not.toHaveBeenCalled();
   });
 
   it('remover tira o campo e apaga o arquivo', async () => {
-    const business = {
-      _id: new Types.ObjectId(),
-      name: 'Loja',
-      logoUrl: `${BUCKET}business/x/menu/logo-0.webp`,
-      menu: {},
-    };
-    const { service, storage, updateOne } = imageSetup(business);
-    await service.removeStoreImage(String(business._id), 'logo');
-    expect((updateOne.mock.calls[0] as any[])[1]).toEqual({
-      $unset: { logoUrl: '' },
+    const st = storage();
+    const { service, businessId, lastWrite } = makeService({
+      menu: {
+        store: { images: { logoUrl: `${BUCKET}business/x/menu/logo-0.webp` } },
+      },
+      storage: st,
     });
-    expect(storage.deleteFile).toHaveBeenCalledWith(
-      'business/x/menu/logo-0.webp',
-    );
+    await service.removeStoreImage(businessId, 'logo');
+    expect(lastWrite()).toEqual({ $unset: { 'store.images.logoUrl': '' } });
+    expect(st.deleteFile).toHaveBeenCalledWith('business/x/menu/logo-0.webp');
   });
 });
 
-describe('MenuService — entrega e retirada', () => {
+describe('MenuService — configurações', () => {
   it('não deixa desligar entrega e retirada ao mesmo tempo', async () => {
-    const business = {
-      _id: new Types.ObjectId(),
-      name: 'Loja',
-      menu: { pickupEnabled: false },
-    };
-    const service = new MenuService(
-      {
-        findById: () => ({
-          select: () => ({
-            lean: () => ({ exec: () => Promise.resolve(business) }),
-          }),
-        }),
-        updateOne: jest.fn(),
-      } as any,
-      {} as any,
-      {} as any,
-      {} as any,
-    );
+    const { service, businessId } = makeService({
+      menu: { store: { delivery: { pickupEnabled: false } } },
+    });
     await expect(
-      service.updateSettings(String(business._id), { deliveryEnabled: false }),
+      service.updateSettings(businessId, {
+        store: { delivery: { deliveryEnabled: false } },
+      }),
     ).rejects.toThrow(BadRequestException);
+  });
+
+  it('grava cada campo no seu caminho, sem apagar os irmãos', async () => {
+    const storage = { publicUrl: (p: string) => p };
+    const { service, businessId, lastWrite } = makeService({ storage });
+    await service.updateSettings(businessId, {
+      enabled: true,
+      store: {
+        delivery: { deliveryFee: 7 },
+        openingHours: { '1': ['09:00', '18:00'] },
+        acceptedPayments: ['PIX'],
+      },
+      labelText: { highlightTitle: 'Oi' },
+    });
+    expect(lastWrite()).toEqual({
+      $set: {
+        enabled: true,
+        'store.delivery.deliveryFee': 7,
+        'store.openingHours': { '1': ['09:00', '18:00'] },
+        'store.acceptedPayments': ['PIX'],
+        'labelText.highlightTitle': 'Oi',
+      },
+    });
   });
 });
 
 describe('MenuService — cor da marca no JSON publicado', () => {
   const previewWith = async (themeColor?: string) => {
-    const business = {
-      _id: new Types.ObjectId(),
-      name: 'Loja',
-      menu: { themeColor, items: [] },
-    };
-    const empty = {
-      find: () => ({
-        select: () => ({ lean: () => ({ exec: () => Promise.resolve([]) }) }),
-      }),
-    };
-    const service = new MenuService(
-      {
-        findById: () => ({
-          select: () => ({
-            lean: () => ({ exec: () => Promise.resolve(business) }),
-          }),
-        }),
-      } as any,
-      empty as any,
-      empty as any,
-      {} as any,
-    );
-    return (await service.preview(String(business._id))).store.themeColor;
+    const { service, businessId } = makeService({
+      menu: { store: { colors: { themeColor } } },
+    });
+    return (await service.preview(businessId)).store.themeColor;
   };
 
   it('publica a cor em minúsculas', async () => {

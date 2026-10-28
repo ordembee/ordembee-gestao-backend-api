@@ -2,7 +2,10 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { StockMovementsController } from './stock-movements.controller';
 import { StockMovementsService } from './stock-movements.service';
-import { StockMovement, StockMovementSchema } from './schemas/stock-movement.schema';
+import {
+  StockMovement,
+  StockMovementSchema,
+} from './schemas/stock-movement.schema';
 import { Product, ProductSchema } from '../products/schemas/product.schema';
 import { User, UserSchema } from '../users/schemas/user.schema';
 import { BusinessModule } from '../business/business.module';

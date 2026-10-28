@@ -16,7 +16,12 @@ export class ReportsController {
     @Query('dateTo') dateTo?: string,
     @Query('campaign') campaign?: string,
   ) {
-    return this.reportsService.getOverview(user.businessId, dateFrom, dateTo, campaign);
+    return this.reportsService.getOverview(
+      user.businessId,
+      dateFrom,
+      dateTo,
+      campaign,
+    );
   }
 
   @Get('period-comparison')
@@ -26,7 +31,12 @@ export class ReportsController {
     @Query('dateTo') dateTo?: string,
     @Query('campaign') campaign?: string,
   ) {
-    return this.reportsService.getPeriodComparison(user.businessId, dateFrom, dateTo, campaign);
+    return this.reportsService.getPeriodComparison(
+      user.businessId,
+      dateFrom,
+      dateTo,
+      campaign,
+    );
   }
 
   @Get('sales-by-period')
@@ -70,7 +80,12 @@ export class ReportsController {
     @Query('dateTo') dateTo?: string,
     @Query('campaign') campaign?: string,
   ) {
-    return this.reportsService.getABCCurve(user.businessId, dateFrom, dateTo, campaign);
+    return this.reportsService.getABCCurve(
+      user.businessId,
+      dateFrom,
+      dateTo,
+      campaign,
+    );
   }
 
   @Get('waste')
@@ -79,7 +94,11 @@ export class ReportsController {
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
   ) {
-    return this.reportsService.getWasteReport(user.businessId, dateFrom, dateTo);
+    return this.reportsService.getWasteReport(
+      user.businessId,
+      dateFrom,
+      dateTo,
+    );
   }
 
   @Get('breakeven')
@@ -107,6 +126,11 @@ export class ReportsController {
     @Query('dateTo') dateTo?: string,
     @Query('campaign') campaign?: string,
   ) {
-    return this.reportsService.getByChannel(user.businessId, dateFrom, dateTo, campaign);
+    return this.reportsService.getByChannel(
+      user.businessId,
+      dateFrom,
+      dateTo,
+      campaign,
+    );
   }
 }

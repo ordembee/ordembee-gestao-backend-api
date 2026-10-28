@@ -56,6 +56,11 @@ class UpdatePricesDto {
   @ValidateNested()
   @Type(() => UpdateChannelPriceDto)
   deliveryProprio?: UpdateChannelPriceDto;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => UpdateChannelPriceDto)
+  ordemBee?: UpdateChannelPriceDto;
 }
 
 export class UpdateProductDto {

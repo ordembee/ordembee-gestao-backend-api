@@ -72,16 +72,31 @@ describe('IngredientsService.resolvePrice', () => {
     const cremePrice = service.resolvePrice(cremeId, map, memo, new Set());
     const expected = (leitePrice * 400 + cremePrice * 200) / 500;
 
-    const price = service.resolvePrice(recheioNinhoId, map, new Map(), new Set());
+    const price = service.resolvePrice(
+      recheioNinhoId,
+      map,
+      new Map(),
+      new Set(),
+    );
     expect(price).toBeCloseTo(expected, 6);
   });
 
   it('resolves a second level of nesting (composto usando composto)', () => {
     const map = baseMap();
-    const ninhoPrice = service.resolvePrice(recheioNinhoId, map, new Map(), new Set());
+    const ninhoPrice = service.resolvePrice(
+      recheioNinhoId,
+      map,
+      new Map(),
+      new Set(),
+    );
     const expected = (ninhoPrice * 300) / 300;
 
-    const price = service.resolvePrice(recheioKinderId, map, new Map(), new Set());
+    const price = service.resolvePrice(
+      recheioKinderId,
+      map,
+      new Map(),
+      new Set(),
+    );
     expect(price).toBeCloseTo(expected, 6);
     expect(price).toBeCloseTo(ninhoPrice, 6);
   });
@@ -108,7 +123,9 @@ describe('IngredientsService.resolvePrice', () => {
     const map = baseMap();
     map.set(recheioNinhoId, {
       ...map.get(recheioNinhoId),
-      components: [{ ingredientId: new Types.ObjectId(recheioNinhoId), quantity: 1 }],
+      components: [
+        { ingredientId: new Types.ObjectId(recheioNinhoId), quantity: 1 },
+      ],
     });
     expect(() =>
       service.resolvePrice(recheioNinhoId, map, new Map(), new Set()),
@@ -140,10 +157,20 @@ describe('IngredientsService.resolvePrice', () => {
 
   it('reflects an updated leaf price immediately (no caching)', () => {
     const map = baseMap();
-    const before = service.resolvePrice(recheioNinhoId, map, new Map(), new Set());
+    const before = service.resolvePrice(
+      recheioNinhoId,
+      map,
+      new Map(),
+      new Set(),
+    );
 
     map.set(leiteId, { ...map.get(leiteId), purchasePrice: 45.8 });
-    const after = service.resolvePrice(recheioNinhoId, map, new Map(), new Set());
+    const after = service.resolvePrice(
+      recheioNinhoId,
+      map,
+      new Map(),
+      new Set(),
+    );
 
     expect(after).toBeGreaterThan(before);
   });
@@ -163,7 +190,11 @@ describe('IngredientsService.ensureOperationalCostIngredient', () => {
         periodEnd: new Date(),
       }),
     } as any;
-    const service = new IngredientsService(ingredientModel, {} as any, expensesService);
+    const service = new IngredientsService(
+      ingredientModel,
+      {} as any,
+      expensesService,
+    );
     return { service, updateOne, expensesService };
   }
 

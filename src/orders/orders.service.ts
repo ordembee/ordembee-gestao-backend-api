@@ -15,12 +15,22 @@ import {
   OrderRequestedPayment,
   OrderSource,
   OrderStatus,
+  UBER_ACTIVE_STATUSES,
 } from './schemas/order.schema';
+import type { OrderDelivery, OrderInfinitePay } from './schemas/order.schema';
+import {
+  StructuredAddress,
+  formatStructuredAddress,
+} from '../delivery/uber-direct.util';
 import {
   OrderCounter,
   OrderCounterDocument,
 } from './schemas/order-counter.schema';
-import { CreateOrderDto, OrderItemDto, OrderPaymentDto } from './dto/create-order.dto';
+import {
+  CreateOrderDto,
+  OrderItemDto,
+  OrderPaymentDto,
+} from './dto/create-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
 import { DeliverOrderDto } from './dto/deliver-order.dto';
 import { AddOrderPaymentDto } from './dto/add-order-payment.dto';
@@ -33,7 +43,10 @@ import {
 import { StockMovementsService } from '../stock-movements/stock-movements.service';
 import { MovementType } from '../stock-movements/schemas/stock-movement.schema';
 import { PricingsService } from '../pricings/pricings.service';
-import { PreparedCampaigns, CampaignsService } from '../campaigns/campaigns.service';
+import {
+  PreparedCampaigns,
+  CampaignsService,
+} from '../campaigns/campaigns.service';
 import { SalesService } from '../sales/sales.service';
 import { BusinessService } from '../business/business.service';
 import { PaymentMethod } from '../common/enums/payment-method.enum';
@@ -120,6 +133,14 @@ export interface OrderWithTotals {
   amountPaid: number;
   amountDue: number;
   isPaid: boolean;
+}
+
+/** O que o painel acrescenta a um pedido novo (resolvido e validado antes, em `PanelCheckoutService`). */
+export interface PanelOrderExtras {
+  /** Entrega Uber ja com a cotacao aceita. */
+  delivery?: OrderDelivery;
+  /** Cobranca pelo link da InfinitePay; `amount` ausente = total. */
+  infinitePay?: { orderNsu: string; amount?: number };
 }
 
 @Injectable()
@@ -511,6 +532,24 @@ export class OrdersService {
     return customer;
   }
 
+  /** Endereco informado na encomenda vira o endereco do cadastro (vale o mais recente). */
+  private async rememberCustomerAddress(
+    customer: CustomerDocument,
+    address: string | undefined,
+    details?: StructuredAddress,
+  ): Promise<void> {
+    const next = address?.trim();
+    if (!next || next === customer.address?.trim()) return;
+    customer.address = next;
+    // Texto livre: o endereco campo a campo (do cardapio) deixa de valer;
+    // entrega Uber traz o endereco estruturado e ele passa a ser o do cadastro.
+    customer.addressDetails = details;
+    await customer.save();
+    this.logger.log(
+      `Endereço do cliente atualizado pela encomenda: ${customer._id.toString()}`,
+    );
+  }
+
   private assertEditable(order: OrderDocument): void {
     if (order.status === OrderStatus.CANCELADA) {
       throw new BadRequestException(
@@ -532,6 +571,7 @@ export class OrdersService {
     firebaseUid: string,
     businessId: string,
     dto: CreateOrderDto,
+    extras: PanelOrderExtras = {},
   ): Promise<Order & OrderWithTotals> {
     const [user, customer, tz] = await Promise.all([
       this.requireUser(firebaseUid),
@@ -543,7 +583,10 @@ export class OrdersService {
     const itemsTotal = this.round(
       items.reduce((sum, item) => sum + item.subtotal, 0),
     );
-    const deliveryFee = this.round(dto.deliveryFee ?? 0);
+    // Entrega Uber: o frete e o da cotacao aceita, nunca o digitado.
+    const deliveryFee = this.round(
+      extras.delivery ? extras.delivery.quotedFee : (dto.deliveryFee ?? 0),
+    );
 
     // O desconto da campaign incide so nos itens — taxa de entrega nao entra.
     const preparedTags = await this.campaignsService.prepareForDocument(
@@ -563,12 +606,42 @@ export class OrdersService {
 
     const payments = (dto.payments ?? []).filter((p) => p.amount > 0);
     this.assertPaymentsFit(payments, total, 0);
+    // Link da InfinitePay: sinal ou total. Sem `amount` cobra o total.
+    let infinitePay: OrderInfinitePay | undefined;
+    if (extras.infinitePay) {
+      const chargeAmount = this.round(
+        Math.min(extras.infinitePay.amount ?? total, total),
+      );
+      if (chargeAmount < 1) {
+        throw new BadRequestException(
+          'A InfinitePay só aceita cobranças a partir de R$ 1,00',
+        );
+      }
+      infinitePay = {
+        orderNsu: extras.infinitePay.orderNsu,
+        chargeAmount,
+      };
+    }
+    // Encomenda nova nao nasce atrasada: o dia (no fuso da loja) nao pode ter passado.
+    if (dto.deliveryDate < zonedDateString(new Date(), tz)) {
+      throw new BadRequestException(
+        'A data de entrega não pode ser no passado',
+      );
+    }
     const deliveryAt = this.buildDeliveryAt(
       dto.deliveryDate,
       dto.deliveryTime,
       tz,
     );
     const code = await this.nextCode(businessId);
+    await this.rememberCustomerAddress(
+      customer,
+      dto.customerAddress ??
+        (extras.delivery
+          ? formatStructuredAddress(extras.delivery.dropoff)
+          : undefined),
+      extras.delivery?.dropoff,
+    );
 
     const order = await this.orderModel.create({
       code,
@@ -577,16 +650,28 @@ export class OrdersService {
       customerId: customer._id,
       customerName: customer.name,
       customerPhone: customer.phone,
-      customerAddress: dto.customerAddress ?? customer.address,
+      customerAddress:
+        dto.customerAddress ??
+        (extras.delivery
+          ? formatStructuredAddress(extras.delivery.dropoff)
+          : customer.address),
       items,
       itemsTotal,
       deliveryFee,
       total,
       discount: discount ?? undefined,
+      delivery: extras.delivery,
+      infinitePay,
+      // Mesmo desenho do pedido do cardapio pago online: o painel mostra "a receber" pelo link.
+      requestedPayment: infinitePay
+        ? { method: PaymentMethod.PAGAMENTO_ONLINE, prepaid: true }
+        : undefined,
       totalProfit,
       deliveryAt,
       hasDeliveryTime: !!dto.deliveryTime,
-      fulfillment: dto.fulfillment ?? OrderFulfillment.RETIRADA,
+      fulfillment: extras.delivery
+        ? OrderFulfillment.ENTREGA
+        : (dto.fulfillment ?? OrderFulfillment.RETIRADA),
       status: OrderStatus.PENDENTE,
       tags,
       notes: dto.notes,
@@ -629,13 +714,57 @@ export class OrdersService {
   async findMenuOrderByRef(
     businessId: string,
     externalRef: string,
-  ): Promise<{ code: number; total: number } | null> {
+  ): Promise<{
+    code: number;
+    total: number;
+    prepaid: boolean;
+    checkoutUrl?: string;
+  } | null> {
     const order = await this.orderModel
       .findOne({ businessId: new Types.ObjectId(businessId), externalRef })
-      .select('code total')
-      .lean<{ code: number; total: number }>()
+      .select('code total requestedPayment.prepaid infinitePay.checkoutUrl')
+      .lean<{
+        code: number;
+        total: number;
+        requestedPayment?: { prepaid?: boolean };
+        infinitePay?: { checkoutUrl?: string };
+      }>()
       .exec();
-    return order ? { code: order.code, total: order.total } : null;
+    return order
+      ? {
+          code: order.code,
+          total: order.total,
+          prepaid: !!order.requestedPayment?.prepaid,
+          checkoutUrl: order.infinitePay?.checkoutUrl,
+        }
+      : null;
+  }
+
+  /**
+   * Cliente avisou pelo cardapio que ja pagou o Pix. So marca a hora (o
+   * operador confere o extrato); repetir nao muda nada.
+   */
+  async claimMenuPayment(
+    businessId: string,
+    externalRef: string,
+  ): Promise<{ code: number; claimedAt: string }> {
+    const order = await this.orderModel
+      .findOne({ businessId: new Types.ObjectId(businessId), externalRef })
+      .exec();
+    if (!order || !order.requestedPayment?.prepaid) {
+      throw new NotFoundException('Pedido não encontrado');
+    }
+    if (!order.paymentClaimedAt) {
+      order.paymentClaimedAt = new Date();
+      await order.save();
+      this.logger.log(
+        `Cliente avisou pagamento do Pix: #${order.code} | negócio: ${businessId}`,
+      );
+    }
+    return {
+      code: order.code,
+      claimedAt: order.paymentClaimedAt.toISOString(),
+    };
   }
 
   /**
@@ -666,7 +795,10 @@ export class OrdersService {
     fulfillment: OrderFulfillment;
     deliveryFee: number;
     customerAddress?: string;
+    customerEmail?: string;
     requestedPayment: OrderRequestedPayment;
+    /** Entrega Uber (cotacao que o cliente pagou + destino estruturado). */
+    delivery?: OrderDelivery;
     notes?: string;
   }): Promise<Order & OrderWithTotals> {
     const { businessId, externalRef, customer } = input;
@@ -710,6 +842,7 @@ export class OrdersService {
         customerName: customer.name,
         customerPhone: customer.phone,
         customerAddress: input.customerAddress,
+        customerEmail: input.customerEmail,
         items,
         itemsTotal,
         deliveryFee,
@@ -723,6 +856,7 @@ export class OrdersService {
         notes: input.notes,
         payments: [],
         requestedPayment: input.requestedPayment,
+        delivery: input.delivery,
         statusHistory: [
           {
             status: OrderStatus.PENDENTE,
@@ -778,7 +912,14 @@ export class OrdersService {
     since?: string,
   ): Promise<{
     serverTime: string;
-    orders: { _id: string; code: number; customerName: string; total: number; fulfillment: OrderFulfillment; createdAt: string }[];
+    orders: {
+      _id: string;
+      code: number;
+      customerName: string;
+      total: number;
+      fulfillment: OrderFulfillment;
+      createdAt: string;
+    }[];
   }> {
     const now = new Date();
     const floor = new Date(now.getTime() - 24 * 60 * 60 * 1000);
@@ -794,7 +935,16 @@ export class OrdersService {
       .sort({ createdAt: 1 })
       .limit(20)
       .select('code customerName total fulfillment createdAt')
-      .lean<{ _id: Types.ObjectId; code: number; customerName: string; total: number; fulfillment: OrderFulfillment; createdAt: Date }[]>()
+      .lean<
+        {
+          _id: Types.ObjectId;
+          code: number;
+          customerName: string;
+          total: number;
+          fulfillment: OrderFulfillment;
+          createdAt: Date;
+        }[]
+      >()
       .exec();
 
     return {
@@ -868,7 +1018,8 @@ export class OrdersService {
         { customerName: { $regex: search, $options: 'i' } },
         { customerPhone: { $regex: search, $options: 'i' } },
       ];
-      if (Number.isInteger(asNumber) && asNumber > 0) or.push({ code: asNumber });
+      if (Number.isInteger(asNumber) && asNumber > 0)
+        or.push({ code: asNumber });
       filter.$or = or;
     }
 
@@ -921,7 +1072,10 @@ export class OrdersService {
       { $match: { businessId: bizObjectId } },
       {
         $facet: {
-          open: [{ $match: { status: { $in: OPEN_STATUSES } } }, { $count: 'n' }],
+          open: [
+            { $match: { status: { $in: OPEN_STATUSES } } },
+            { $count: 'n' },
+          ],
           today: [
             {
               $match: {
@@ -938,7 +1092,13 @@ export class OrdersService {
                 deliveredAt: { $gte: start, $lte: end },
               },
             },
-            { $group: { _id: null, n: { $sum: 1 }, revenue: { $sum: '$total' } } },
+            {
+              $group: {
+                _id: null,
+                n: { $sum: 1 },
+                revenue: { $sum: '$total' },
+              },
+            },
           ],
           late: [{ $match: lateOrdersFilter(now) }, { $count: 'n' }],
           due: [
@@ -955,7 +1115,10 @@ export class OrdersService {
       },
     ]);
 
-    const raw = (result ?? {}) as Record<string, { n?: number; revenue?: number; total?: number; paid?: number }[]>;
+    const raw = (result ?? {}) as Record<
+      string,
+      { n?: number; revenue?: number; total?: number; paid?: number }[]
+    >;
     const first = (key: string) => raw[key]?.[0] ?? {};
 
     return {
@@ -1140,6 +1303,7 @@ export class OrdersService {
   ): Promise<Order & OrderWithTotals> {
     const order = await this.requireOrder(id, businessId);
     this.assertEditable(order);
+    this.assertManualPaymentAllowed(order);
     const user = await this.requireUser(firebaseUid);
 
     this.assertPaymentsFit([dto], order.total, this.amountPaidOf(order));
@@ -1157,6 +1321,23 @@ export class OrdersService {
       `Pagamento registrado na encomenda #${order.code}: ${dto.method} ${dto.amount} | negócio: ${businessId}`,
     );
     return this.findOne(id, businessId);
+  }
+
+  /**
+   * Pedido cobrado pela InfinitePay so recebe o pagamento pela confirmacao
+   * dela: lancar a mao dobraria o valor quando o cliente pagasse de verdade.
+   */
+  private assertManualPaymentAllowed(
+    order: OrderDocument,
+    action: 'pay' | 'deliver' = 'pay',
+  ): void {
+    if (order.infinitePay?.orderNsu && !order.infinitePay.paidAt) {
+      throw new BadRequestException(
+        action === 'deliver'
+          ? 'Pagamento online pendente: o pedido só pode ser entregue depois que a InfinitePay confirmar o pagamento. Use "Verificar pagamento" ou aguarde o cliente pagar.'
+          : 'Este pedido é pago pela InfinitePay: o pagamento é confirmado automaticamente. Use "Verificar pagamento" ou aguarde o cliente pagar.',
+      );
+    }
   }
 
   private assertPaymentsFit(
@@ -1190,8 +1371,38 @@ export class OrdersService {
     const order = await this.requireOrder(id, businessId);
     this.assertEditable(order);
     const user = await this.requireUser(firebaseUid);
+    return this.deliverWith(order, businessId, user, dto);
+  }
+
+  /**
+   * Conclusao automatica (ex.: a Uber avisou que entregou). A venda fica no
+   * nome de quem solicitou a entrega; o historico mostra `actorName`.
+   */
+  async deliverAsUser(
+    id: string,
+    businessId: string,
+    userId: Types.ObjectId,
+    actorName: string,
+  ): Promise<Order & OrderWithTotals> {
+    const order = await this.requireOrder(id, businessId);
+    this.assertEditable(order);
+    const user = await this.userModel.findById(userId).exec();
+    if (!user) throw new NotFoundException('Usuário não encontrado');
+    return this.deliverWith(order, businessId, user, {}, actorName);
+  }
+
+  private async deliverWith(
+    order: OrderDocument,
+    businessId: string,
+    user: UserDocument,
+    dto: DeliverOrderDto,
+    actorName?: string,
+  ): Promise<Order & OrderWithTotals> {
+    const id = order._id.toString();
 
     const settlement = (dto.payments ?? []).filter((p) => p.amount > 0);
+    // Pagamento online pendente: nem entrega com saldo vira fiado — espera a InfinitePay confirmar.
+    this.assertManualPaymentAllowed(order, 'deliver');
     this.assertPaymentsFit(settlement, order.total, this.amountPaidOf(order));
 
     const now = new Date();
@@ -1233,6 +1444,7 @@ export class OrdersService {
       businessId,
       userId: user._id as Types.ObjectId,
       orderId: order._id as Types.ObjectId,
+      orderSource: order.source,
       items: order.items.map((item) => ({
         productId: item.productId,
         productName: item.productName,
@@ -1272,7 +1484,7 @@ export class OrdersService {
       status: OrderStatus.ENTREGUE,
       at: now,
       userId: user._id as Types.ObjectId,
-      userName: user.displayName,
+      userName: actorName ?? user.displayName,
     });
     await order.save();
 
@@ -1296,6 +1508,12 @@ export class OrdersService {
     if (order.status === OrderStatus.CANCELADA) {
       throw new BadRequestException('Esta encomenda já foi cancelada');
     }
+    const uberStatus = order.delivery?.status;
+    if (uberStatus && UBER_ACTIVE_STATUSES.includes(uberStatus)) {
+      throw new BadRequestException(
+        'Há um entregador da Uber a caminho. Cancele a entrega antes de cancelar o pedido.',
+      );
+    }
     const user = await this.requireUser(firebaseUid);
 
     if (order.saleId) {
@@ -1304,9 +1522,7 @@ export class OrdersService {
         businessId,
       );
     } else {
-      const delta = this.buildStockDelta(
-        order.items as unknown as BuiltItem[],
-      );
+      const delta = this.buildStockDelta(order.items as unknown as BuiltItem[]);
       for (const entry of delta.values()) entry.quantity = -entry.quantity;
       await this.applyStockDelta(
         businessId,

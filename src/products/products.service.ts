@@ -37,7 +37,10 @@ export class ProductsService {
     const pricingIds = products
       .filter((p) => p.pricingId)
       .map((p) => p.pricingId as Types.ObjectId);
-    const pricings = await this.pricingsService.findManyByIds(businessId, pricingIds);
+    const pricings = await this.pricingsService.findManyByIds(
+      businessId,
+      pricingIds,
+    );
     const byId = new Map(pricings.map((p) => [p._id.toString(), p]));
 
     return products.map((p) => {
@@ -45,7 +48,11 @@ export class ProductsService {
       const linked = p.pricingId ? byId.get(p.pricingId.toString()) : undefined;
       if (linked && linked.custoFinal !== null) {
         obj.costPrice = linked.custoFinal;
-        obj.linkedPricing = { _id: linked._id, name: linked.name, precoVenda: linked.precoVenda };
+        obj.linkedPricing = {
+          _id: linked._id,
+          name: linked.name,
+          precoVenda: linked.precoVenda,
+        };
       } else {
         obj.linkedPricing = null;
       }
@@ -67,7 +74,10 @@ export class ProductsService {
         'Não é possível vincular uma precificação a um produto combo',
       );
     }
-    const exists = await this.pricingsService.existsActive(bizObj.toString(), pricingId);
+    const exists = await this.pricingsService.existsActive(
+      bizObj.toString(),
+      pricingId,
+    );
     if (!exists) {
       throw new NotFoundException('Precificação não encontrada ou inativa');
     }
@@ -77,7 +87,9 @@ export class ProductsService {
       businessId: bizObj,
       pricingId: pricingIdObj,
       isActive: true,
-      ...(excludeProductId ? { _id: { $ne: new Types.ObjectId(excludeProductId) } } : {}),
+      ...(excludeProductId
+        ? { _id: { $ne: new Types.ObjectId(excludeProductId) } }
+        : {}),
     });
     if (conflict) {
       throw new ConflictException(
@@ -107,7 +119,11 @@ export class ProductsService {
       }));
     }
     if (dto.pricingId) {
-      data.pricingId = await this.assertPricingLink(bizObj, dto.pricingId, !!dto.isCombo);
+      data.pricingId = await this.assertPricingLink(
+        bizObj,
+        dto.pricingId,
+        !!dto.isCombo,
+      );
     }
 
     const product = await this.productModel.create(data);
@@ -172,7 +188,10 @@ export class ProductsService {
     dto: UpdateProductDto,
   ): Promise<any> {
     const bizObj = new Types.ObjectId(businessId);
-    const existing = await this.productModel.findOne({ _id: id, businessId: bizObj });
+    const existing = await this.productModel.findOne({
+      _id: id,
+      businessId: bizObj,
+    });
     if (!existing) {
       this.logger.warn(
         `Tentativa de atualizar produto inexistente: id=${id} | negócio: ${businessId}`,
@@ -202,7 +221,12 @@ export class ProductsService {
         willBeLinked = false;
       } else {
         const isCombo = dto.isCombo ?? existing.isCombo;
-        update.pricingId = await this.assertPricingLink(bizObj, dto.pricingId, isCombo, id);
+        update.pricingId = await this.assertPricingLink(
+          bizObj,
+          dto.pricingId,
+          isCombo,
+          id,
+        );
         willBeLinked = true;
       }
     }
@@ -216,7 +240,10 @@ export class ProductsService {
     const product = await this.productModel
       .findOneAndUpdate(
         { _id: id, businessId: bizObj },
-        { ...(Object.keys(update).length ? { $set: update } : {}), ...(unset ? { $unset: unset } : {}) },
+        {
+          ...(Object.keys(update).length ? { $set: update } : {}),
+          ...(unset ? { $unset: unset } : {}),
+        },
         { new: true },
       )
       .populate('categoryId', 'name color icon')

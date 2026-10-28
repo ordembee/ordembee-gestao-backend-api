@@ -1,4 +1,9 @@
-import { ArrayMaxSize, IsArray, IsOptional, ValidateNested } from 'class-validator';
+import {
+  ArrayMaxSize,
+  IsArray,
+  IsOptional,
+  ValidateNested,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 import { OrderPaymentDto } from './create-order.dto';
 

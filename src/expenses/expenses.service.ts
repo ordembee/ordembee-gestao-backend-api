@@ -16,7 +16,8 @@ export const OPERATIONAL_HOURS_PER_MONTH = 168;
 @Injectable()
 export class ExpensesService {
   constructor(
-    @InjectModel(Expense.name) private readonly expenseModel: Model<ExpenseDocument>,
+    @InjectModel(Expense.name)
+    private readonly expenseModel: Model<ExpenseDocument>,
     private readonly businessService: BusinessService,
   ) {}
 
@@ -57,7 +58,11 @@ export class ExpensesService {
     return expense;
   }
 
-  async update(id: string, businessId: string, dto: UpdateExpenseDto): Promise<Expense> {
+  async update(
+    id: string,
+    businessId: string,
+    dto: UpdateExpenseDto,
+  ): Promise<Expense> {
     const update: Record<string, unknown> = { ...dto };
     if (dto.date) {
       const tz = await this.businessService.getTimezone(businessId);
@@ -65,7 +70,10 @@ export class ExpensesService {
     }
 
     const expense = await this.expenseModel.findOneAndUpdate(
-      { _id: new Types.ObjectId(id), businessId: new Types.ObjectId(businessId) },
+      {
+        _id: new Types.ObjectId(id),
+        businessId: new Types.ObjectId(businessId),
+      },
       { $set: update },
       { new: true },
     );
@@ -78,7 +86,8 @@ export class ExpensesService {
       _id: new Types.ObjectId(id),
       businessId: new Types.ObjectId(businessId),
     });
-    if (!result.deletedCount) throw new NotFoundException('Despesa não encontrada');
+    if (!result.deletedCount)
+      throw new NotFoundException('Despesa não encontrada');
   }
 
   async getSummary(
@@ -92,7 +101,9 @@ export class ExpensesService {
     byCategory: { category: string; total: number }[];
   }> {
     const tz = await this.businessService.getTimezone(businessId);
-    const match: Record<string, unknown> = { businessId: new Types.ObjectId(businessId) };
+    const match: Record<string, unknown> = {
+      businessId: new Types.ObjectId(businessId),
+    };
     const dateFilter = pureDateFilter(dateFrom, dateTo, tz);
     if (dateFilter) match.date = dateFilter;
 
@@ -105,8 +116,14 @@ export class ExpensesService {
               $group: {
                 _id: null,
                 total: { $sum: '$amount' },
-                totalFixed: { $sum: { $cond: [{ $eq: ['$type', 'FIXO'] }, '$amount', 0] } },
-                totalVariable: { $sum: { $cond: [{ $eq: ['$type', 'VARIAVEL'] }, '$amount', 0] } },
+                totalFixed: {
+                  $sum: { $cond: [{ $eq: ['$type', 'FIXO'] }, '$amount', 0] },
+                },
+                totalVariable: {
+                  $sum: {
+                    $cond: [{ $eq: ['$type', 'VARIAVEL'] }, '$amount', 0],
+                  },
+                },
               },
             },
           ],
@@ -118,19 +135,29 @@ export class ExpensesService {
       },
     ]);
 
-    const t = result?.totals?.[0] ?? { total: 0, totalFixed: 0, totalVariable: 0 };
+    const t = result?.totals?.[0] ?? {
+      total: 0,
+      totalFixed: 0,
+      totalVariable: 0,
+    };
     return {
       total: t.total,
       totalFixed: t.totalFixed,
       totalVariable: t.totalVariable,
-      byCategory: (result?.byCategory ?? []).map((c: { _id: string; total: number }) => ({
-        category: c._id,
-        total: c.total,
-      })),
+      byCategory: (result?.byCategory ?? []).map(
+        (c: { _id: string; total: number }) => ({
+          category: c._id,
+          total: c.total,
+        }),
+      ),
     };
   }
 
-  async sumOperational(businessId: string, dateFrom: Date, dateTo: Date): Promise<number> {
+  async sumOperational(
+    businessId: string,
+    dateFrom: Date,
+    dateTo: Date,
+  ): Promise<number> {
     const [result] = await this.expenseModel.aggregate([
       {
         $match: {

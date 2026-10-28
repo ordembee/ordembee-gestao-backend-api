@@ -211,5 +211,8 @@ export function zonedCurrentMonthRange(
   const firstDay = `${y}-${String(m).padStart(2, '0')}-01`;
   const lastDate = new Date(Date.UTC(y, m, 0)).getUTCDate(); // dia 0 do mes seguinte
   const lastDay = `${y}-${String(m).padStart(2, '0')}-${String(lastDate).padStart(2, '0')}`;
-  return { start: zonedStartOfDay(firstDay, tz), end: zonedEndOfDay(lastDay, tz) };
+  return {
+    start: zonedStartOfDay(firstDay, tz),
+    end: zonedEndOfDay(lastDay, tz),
+  };
 }

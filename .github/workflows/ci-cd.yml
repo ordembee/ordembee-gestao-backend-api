@@ -54,6 +54,9 @@ jobs:
       - name: Write .env from secrets
         env:
           INTERNAL_API_SECRET: ${{ secrets.INTERNAL_API_SECRET }}
+          CREDENTIALS_ENCRYPTION_KEY: ${{ secrets.CREDENTIALS_ENCRYPTION_KEY }}
+          UBER_WEBHOOK_PUBLIC_URL: ${{ vars.UBER_WEBHOOK_PUBLIC_URL }}
+          INFINITEPAY_WEBHOOK_PUBLIC_URL: ${{ vars.INFINITEPAY_WEBHOOK_PUBLIC_URL }}
         run: |
           cat <<EOF > .env.my-store-prd
           MONGODB_URI=${{ secrets.MONGODB_URI }}
@@ -65,6 +68,25 @@ jobs:
             echo "::warning::INTERNAL_API_SECRET ausente ou curto: pedidos e 'ao vivo' do cardápio não vão funcionar em produção"
           else
             echo "INTERNAL_API_SECRET=$INTERNAL_API_SECRET" >> .env.my-store-prd
+          fi
+          # Chave que cifra as credenciais da Uber guardadas no Mongo: 64 caracteres hex (openssl rand -hex 32).
+          # Sem ela a tela "Entregador" nao consegue salvar o Client secret. NUNCA troque depois de gravar credenciais.
+          if ! printf '%s' "$CREDENTIALS_ENCRYPTION_KEY" | grep -Eq '^[0-9a-fA-F]{64}$'; then
+            echo "::warning::CREDENTIALS_ENCRYPTION_KEY ausente ou invalida (precisa de 64 hex): nao da para salvar credenciais da Uber em producao"
+          else
+            echo "CREDENTIALS_ENCRYPTION_KEY=$CREDENTIALS_ENCRYPTION_KEY" >> .env.my-store-prd
+          fi
+          # Enderecos publicos (my-store-cardapio-web-back-api) que a Uber e a InfinitePay chamam.
+          # Sem o da InfinitePay o pagamento so e confirmado ao cliente voltar do checkout ou pelo botao "Verificar pagamento".
+          if [ -n "$UBER_WEBHOOK_PUBLIC_URL" ]; then
+            echo "UBER_WEBHOOK_PUBLIC_URL=$UBER_WEBHOOK_PUBLIC_URL" >> .env.my-store-prd
+          else
+            echo "::warning::UBER_WEBHOOK_PUBLIC_URL ausente: a tela nao mostra o endereco do webhook da Uber"
+          fi
+          if [ -n "$INFINITEPAY_WEBHOOK_PUBLIC_URL" ]; then
+            echo "INFINITEPAY_WEBHOOK_PUBLIC_URL=$INFINITEPAY_WEBHOOK_PUBLIC_URL" >> .env.my-store-prd
+          else
+            echo "::warning::INFINITEPAY_WEBHOOK_PUBLIC_URL ausente: a InfinitePay nao avisa o pagamento automaticamente"
           fi
 
       - run: npm run build

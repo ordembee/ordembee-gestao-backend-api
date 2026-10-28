@@ -13,7 +13,10 @@ const expressApp = express();
 // an empty stream and throws "Unexpected end of form". This middleware
 // reconstructs a readable stream from rawBody so multer can parse multipart.
 expressApp.use((req: any, _res: any, next: any) => {
-  if (req.rawBody && req.headers['content-type']?.includes('multipart/form-data')) {
+  if (
+    req.rawBody &&
+    req.headers['content-type']?.includes('multipart/form-data')
+  ) {
     const stream = new Readable();
     stream.push(req.rawBody);
     stream.push(null);
@@ -37,9 +40,13 @@ let isInitialized = false;
 
 async function bootstrap() {
   if (isInitialized) return;
-  const app = await NestFactory.create(AppModule, new ExpressAdapter(expressApp), {
-    logger: ['error', 'warn'],
-  });
+  const app = await NestFactory.create(
+    AppModule,
+    new ExpressAdapter(expressApp),
+    {
+      logger: ['error', 'warn'],
+    },
+  );
   app.setGlobalPrefix('v1');
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
   app.enableCors({

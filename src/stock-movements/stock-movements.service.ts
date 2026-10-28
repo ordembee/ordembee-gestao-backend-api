@@ -1,7 +1,11 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { StockMovement, StockMovementDocument, MovementType } from './schemas/stock-movement.schema';
+import {
+  StockMovement,
+  StockMovementDocument,
+  MovementType,
+} from './schemas/stock-movement.schema';
 import { Product, ProductDocument } from '../products/schemas/product.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import { CreateStockMovementDto } from './dto/create-stock-movement.dto';
@@ -43,7 +47,10 @@ export class StockMovementsService {
     const [user, product] = await Promise.all([
       this.userModel.findOne({ firebaseUid }).exec(),
       this.productModel
-        .findOne({ _id: dto.productId, businessId: new Types.ObjectId(businessId) })
+        .findOne({
+          _id: dto.productId,
+          businessId: new Types.ObjectId(businessId),
+        })
         .exec(),
     ]);
 
@@ -102,7 +109,11 @@ export class StockMovementsService {
     return movement;
   }
 
-  async recordSaleMovement(payload: InternalMovementPayload, previousStock: number, newStock: number): Promise<void> {
+  async recordSaleMovement(
+    payload: InternalMovementPayload,
+    previousStock: number,
+    newStock: number,
+  ): Promise<void> {
     await this.movementModel.create({
       productId: payload.productId,
       productName: payload.productName,
@@ -128,7 +139,11 @@ export class StockMovementsService {
       page: number;
       limit: number;
     },
-  ): Promise<{ data: StockMovementDocument[]; total: number; totalPages: number }> {
+  ): Promise<{
+    data: StockMovementDocument[];
+    total: number;
+    totalPages: number;
+  }> {
     const { productId, type, dateFrom, dateTo, page, limit } = params;
 
     const filter: Record<string, unknown> = {

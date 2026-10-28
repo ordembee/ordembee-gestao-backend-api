@@ -160,6 +160,14 @@ export class Sale {
   /** Preenchido quando a venda nasceu da entrega de uma encomenda. */
   @Prop({ type: Types.ObjectId, ref: 'Order' })
   orderId?: Types.ObjectId;
+
+  /**
+   * Origem da encomenda que gerou a venda (INTERNO = operador na plataforma,
+   * CARDAPIO = cardapio digital). Copiada na criacao: a venda e consultada sem
+   * carregar a encomenda.
+   */
+  @Prop({ type: String, enum: ['INTERNO', 'CARDAPIO'] })
+  orderSource?: 'INTERNO' | 'CARDAPIO';
 }
 
 export const SaleSchema = SchemaFactory.createForClass(Sale);

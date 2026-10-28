@@ -4,8 +4,6 @@ import {
   IsBoolean,
   IsMongoId,
   IsOptional,
-  IsString,
-  MaxLength,
 } from 'class-validator';
 
 /** Edicao de uma linha da lista "O que vai ao ar" (o preco e o do produto, nao se edita aqui). */
@@ -13,11 +11,6 @@ export class UpdateMenuItemDto {
   @IsOptional()
   @IsBoolean()
   active?: boolean;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(24)
-  tag?: string;
 
   /** Grupos de complementos do item, na ordem de exibicao. */
   @IsOptional()
@@ -27,10 +20,10 @@ export class UpdateMenuItemDto {
   optionGroupIds?: string[];
 }
 
-/** Ordem completa da lista, como o operador arrastou (primeiro = topo). */
-export class ReorderMenuItemsDto {
+/** Ordem das categorias no cardapio, como o operador arrastou (primeiro = topo). */
+export class ReorderMenuCategoriesDto {
   @IsArray()
-  @ArrayMaxSize(2000)
+  @ArrayMaxSize(500)
   @IsMongoId({ each: true })
-  productIds: string[];
+  categoryIds: string[];
 }
