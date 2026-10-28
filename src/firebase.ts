@@ -50,7 +50,10 @@ async function bootstrap() {
   app.setGlobalPrefix('v1');
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
   app.enableCors({
-    origin: process.env.FRONTEND_URL || 'https://my-store-prd.web.app',
+    // FRONTEND_URL aceita várias origens separadas por vírgula.
+    origin: (process.env.FRONTEND_URL || 'https://my-store-prd.web.app')
+      .split(',')
+      .map((o) => o.trim()),
     credentials: true,
   });
   await app.init();

@@ -50,6 +50,28 @@ import {
 
 export const menuFilePath = (slug: string) => `menus/${slug}.json`;
 
+/** Intervalo minimo entre trocas de slug de um cardapio ja publicado. */
+export const SLUG_CHANGE_COOLDOWN_DAYS = 30;
+
+/** Enderecos que nao podem virar slug (rotas e nomes que o produto usa ou pode usar). */
+export const RESERVED_SLUGS = new Set([
+  'admin',
+  'api',
+  'app',
+  'cardapio',
+  'login',
+  'menus',
+  'ordembee',
+  's',
+  'static',
+  'suporte',
+  'www',
+]);
+
+/** Erro de chave duplicada do Mongo (indice unico do slug). */
+const isDuplicateKey = (err: unknown) =>
+  (err as { code?: number })?.code === 11000;
+
 /** Cardapio do negocio com todos os campos preenchidos (documento pode nem existir ainda). */
 export type ResolvedMenu = Omit<
   MenuOnline,
@@ -88,6 +110,7 @@ export function resolveMenu(doc: Partial<MenuOnline> | null): ResolvedMenu {
   const delivery = store?.delivery;
   return {
     slug: doc?.slug,
+    slugChangedAt: doc?.slugChangedAt ?? null,
     enabled: doc?.enabled ?? false,
     categories: doc?.categories ?? [],
     items: doc?.items ?? [],
@@ -191,9 +214,16 @@ export class MenuService {
     businessId: Types.ObjectId,
     set: Record<string, unknown>,
   ) {
-    await this.menuModel
-      .updateOne({ businessId }, { $set: set }, { upsert: true })
-      .exec();
+    try {
+      await this.menuModel
+        .updateOne({ businessId }, { $set: set }, { upsert: true })
+        .exec();
+    } catch (err) {
+      // O indice unico decide quem fica com o slug, mesmo numa corrida.
+      if (isDuplicateKey(err))
+        throw new ConflictException('Este endereço de cardápio já está em uso');
+      throw err;
+    }
   }
 
   /**
@@ -328,19 +358,38 @@ export class MenuService {
       );
     }
 
+    // Link no ar = ha um arquivo publicado. Trocar o slug entao derruba o
+    // link antigo (e libera o endereco para outro negocio) — por isso o
+    // intervalo minimo entre trocas.
+    const linkIsLive = !!menu.publication.slug;
+    let slugChanged = false;
     if (dto.slug !== undefined && dto.slug !== menu.slug) {
+      if (RESERVED_SLUGS.has(dto.slug))
+        throw new BadRequestException('Este endereço não está disponível');
       const taken = await this.menuModel
         .exists({ slug: dto.slug, businessId: { $ne: bizId } })
         .exec();
       if (taken)
         throw new ConflictException('Este endereço de cardápio já está em uso');
+      if (linkIsLive && menu.slugChangedAt) {
+        const nextAt =
+          menu.slugChangedAt.getTime() +
+          SLUG_CHANGE_COOLDOWN_DAYS * 24 * 60 * 60 * 1000;
+        if (nextAt > Date.now())
+          throw new BadRequestException(
+            `O endereço só pode ser trocado a cada ${SLUG_CHANGE_COOLDOWN_DAYS} dias. Próxima troca: ${new Date(nextAt).toLocaleDateString('pt-BR')}`,
+          );
+      }
+      slugChanged = true;
     }
 
     const set = toSetPaths(dto as Record<string, unknown>);
+    if (slugChanged && linkIsLive) set.slugChangedAt = new Date();
 
     // Desligar o cardapio tira o arquivo do ar na hora — o link para de funcionar.
-    if (dto.enabled === false && menu.publication.slug) {
-      await this.storageService.deleteFile(menuFilePath(menu.publication.slug));
+    const turnedOff = dto.enabled === false && !!menu.publication.slug;
+    if (turnedOff) {
+      await this.deleteMenuFile(bizId, menu.publication.slug!);
       Object.assign(set, {
         'publication.lastPublishedAt': null,
         'publication.hash': null,
@@ -352,7 +401,49 @@ export class MenuService {
     this.logger.log(
       `Cardápio configurado: negócio=${businessId} | campos=${Object.keys(set).join(',')}`,
     );
+
+    // O endereco acabou de ser liberado por outro: o que sobrou do arquivo dele
+    // nao pode ser servido sob o nosso slug. Se algum cardapio ainda o tem como
+    // publicado (troca pendente), nao e resto: fica.
+    if (slugChanged && dto.slug) {
+      const stillPublished = await this.menuModel
+        .exists({ 'publication.slug': dto.slug, businessId: { $ne: bizId } })
+        .exec();
+      if (!stillPublished)
+        await this.storageService.deleteFileIfNotOwner(
+          menuFilePath(dto.slug),
+          bizId.toString(),
+        );
+    }
+
+    // O arquivo mora em `menus/{slug}.json` e o JSON carrega o slug: republica
+    // no endereco novo (o publish apaga o antigo, se ainda for nosso).
+    if (slugChanged && linkIsLive && !turnedOff && menu.enabled) {
+      try {
+        await this.publish(businessId);
+      } catch (err) {
+        // O endereco antigo ja foi liberado: nao deixa o arquivo dele no ar.
+        await this.deleteMenuFile(bizId, menu.publication.slug!);
+        await this.write(bizId, {
+          'publication.lastPublishedAt': null,
+          'publication.hash': null,
+          'publication.slug': null,
+        });
+        throw err;
+      }
+    }
     return this.getSettings(businessId);
+  }
+
+  /**
+   * Tira `menus/{slug}.json` do ar so se for deste negocio: o slug antigo pode
+   * ja ter sido assumido por outro, e o arquivo dele nao e nosso para apagar.
+   */
+  private deleteMenuFile(businessId: Types.ObjectId, slug: string) {
+    return this.storageService.deleteFileIfOwner(
+      menuFilePath(slug),
+      businessId.toString(),
+    );
   }
 
   async preview(businessId: string): Promise<MenuSnapshot> {
@@ -386,9 +477,11 @@ export class MenuService {
     const url = await this.storageService.uploadPublicJson(
       menuFilePath(menu.slug),
       snapshot,
+      60,
+      business._id.toString(),
     );
     if (menu.publication.slug && menu.publication.slug !== menu.slug) {
-      await this.storageService.deleteFile(menuFilePath(menu.publication.slug));
+      await this.deleteMenuFile(business._id, menu.publication.slug);
     }
 
     await this.write(business._id, {

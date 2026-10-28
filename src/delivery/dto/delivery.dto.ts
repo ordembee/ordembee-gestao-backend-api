@@ -161,6 +161,6 @@ export class DispatchUberDeliveryDto {
 
 /** `POST /internal/menu-orders/:ref/payment-claim`. */
 export class MenuPaymentClaimDto {
-  @Matches(/^[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/)
+  @Matches(/^[a-z0-9](?:[a-z0-9-]{0,48}[a-z0-9])?$/)
   slug: string;
 }

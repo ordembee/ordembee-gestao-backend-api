@@ -11,7 +11,10 @@ async function bootstrap() {
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
 
   app.enableCors({
-    origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+    // FRONTEND_URL aceita várias origens separadas por vírgula.
+    origin: (process.env.FRONTEND_URL || 'http://localhost:5173')
+      .split(',')
+      .map((o) => o.trim()),
     credentials: true,
   });
 

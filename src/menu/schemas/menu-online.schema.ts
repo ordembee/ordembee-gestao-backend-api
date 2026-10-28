@@ -215,6 +215,10 @@ export class MenuOnline {
   @Prop()
   slug?: string;
 
+  /** Ultima troca do slug (com cardapio ja no ar) — base do intervalo minimo entre trocas. */
+  @Prop({ type: Date })
+  slugChangedAt?: Date | null;
+
   @Prop({ default: false })
   enabled: boolean;
 

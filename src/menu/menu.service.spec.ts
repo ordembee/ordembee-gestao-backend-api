@@ -458,3 +458,141 @@ describe('MenuService — cor da marca no JSON publicado', () => {
     },
   );
 });
+
+describe('MenuService — troca de slug', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const storage = () => ({
+    publicUrl: (p: string) => p,
+    uploadPublicJson: jest.fn(async (p: string) => p),
+    deleteFileIfOwner: jest.fn(async () => true),
+    deleteFileIfNotOwner: jest.fn(async () => true),
+  });
+
+  it('recusa endereço reservado', async () => {
+    const { service, businessId } = makeService({ storage: storage() });
+    await expect(
+      service.updateSettings(businessId, { slug: 'admin' }),
+    ).rejects.toThrow('não está disponível');
+  });
+
+  it('recusa slug de outro negócio', async () => {
+    const { service, businessId } = makeService({ storage: storage() });
+    (service as any).menuModel.exists.mockReturnValue(chain({ _id: 1 }));
+    await expect(
+      service.updateSettings(businessId, { slug: 'tia-nana' }),
+    ).rejects.toThrow('já está em uso');
+  });
+
+  it('indice unico (corrida) vira conflito, não erro 500', async () => {
+    const { service, businessId, menuUpdate } = makeService({
+      storage: storage(),
+    });
+    menuUpdate.mockImplementation(() => ({
+      exec: () => Promise.reject({ code: 11000 }),
+    }));
+    await expect(
+      service.updateSettings(businessId, { slug: 'tia-nana' }),
+    ).rejects.toThrow('já está em uso');
+  });
+
+  it('cardápio no ar: respeita o intervalo entre trocas', async () => {
+    const { service, businessId } = makeService({
+      storage: storage(),
+      menu: {
+        slug: 'antigo',
+        slugChangedAt: new Date(Date.now() - 5 * DAY),
+        publication: { slug: 'antigo', version: 1 },
+      },
+    });
+    await expect(
+      service.updateSettings(businessId, { slug: 'novo' }),
+    ).rejects.toThrow('a cada 30 dias');
+  });
+
+  it('sem link no ar a troca é livre e não conta no intervalo', async () => {
+    const { service, businessId, lastWrite } = makeService({
+      storage: storage(),
+      menu: { slug: 'antigo' },
+    });
+    await service.updateSettings(businessId, { slug: 'novo' });
+    expect(lastWrite().$set).toEqual({ slug: 'novo' });
+  });
+
+  it('cardápio no ar: grava a troca e republica no endereço novo', async () => {
+    const st = storage();
+    const { service, businessId, saved } = makeService({
+      storage: st,
+      menu: {
+        slug: 'antigo',
+        enabled: true,
+        publication: { slug: 'antigo', version: 1 },
+      },
+    });
+    const publish = jest
+      .spyOn(service, 'publish')
+      .mockResolvedValue({} as never);
+    await service.updateSettings(businessId, { slug: 'novo' });
+    expect(saved('slug')).toBe('novo');
+    expect(publish).toHaveBeenCalledWith(businessId);
+  });
+
+  it('republicar falhou: tira o endereço antigo do ar, só se for do negócio', async () => {
+    const st = storage();
+    const { service, businessId, business, saved } = makeService({
+      storage: st,
+      menu: {
+        slug: 'antigo',
+        enabled: true,
+        publication: { slug: 'antigo', version: 1 },
+      },
+    });
+    jest.spyOn(service, 'publish').mockRejectedValue(new Error('sem produtos'));
+    await expect(
+      service.updateSettings(businessId, { slug: 'novo' }),
+    ).rejects.toThrow('sem produtos');
+    expect(st.deleteFileIfOwner).toHaveBeenCalledWith(
+      'menus/antigo.json',
+      business._id.toString(),
+    );
+    expect(saved('publication.slug')).toBeNull();
+  });
+
+  it('desligar o cardápio apaga o arquivo conferindo o dono', async () => {
+    const st = storage();
+    const { service, businessId, business } = makeService({
+      storage: st,
+      menu: { slug: 'tia', enabled: true, publication: { slug: 'tia' } },
+    });
+    await service.updateSettings(businessId, { enabled: false });
+    expect(st.deleteFileIfOwner).toHaveBeenCalledWith(
+      'menus/tia.json',
+      business._id.toString(),
+    );
+  });
+
+  it('ao assumir um slug, apaga o arquivo que sobrou de outro dono', async () => {
+    const st = storage();
+    const { service, businessId, business } = makeService({
+      storage: st,
+      menu: { slug: 'antigo' },
+    });
+    await service.updateSettings(businessId, { slug: 'tia-nana' });
+    expect(st.deleteFileIfNotOwner).toHaveBeenCalledWith(
+      'menus/tia-nana.json',
+      business._id.toString(),
+    );
+  });
+
+  it('não apaga se outro cardápio ainda o tem como publicado', async () => {
+    const st = storage();
+    const { service, businessId } = makeService({
+      storage: st,
+      menu: { slug: 'antigo' },
+    });
+    (service as any).menuModel.exists
+      .mockReturnValueOnce(chain(null)) // ninguem tem como slug
+      .mockReturnValueOnce(chain({ _id: 1 })); // alguem ainda publica nele
+    await service.updateSettings(businessId, { slug: 'tia-nana' });
+    expect(st.deleteFileIfNotOwner).not.toHaveBeenCalled();
+  });
+});

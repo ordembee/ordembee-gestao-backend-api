@@ -812,7 +812,7 @@ describe('MenuOrdersService.create — entrega pela Uber', () => {
       });
       const result = await service.create(
         uberDto({
-          redirectUrl: 'https://cardapio.app/?loja=tia-nana',
+          redirectUrl: 'https://cardapio.app/?cardapio=tia-nana',
           customer: {
             name: 'Maria Souza',
             phone: '11987654321',
@@ -824,7 +824,7 @@ describe('MenuOrdersService.create — entrega pela Uber', () => {
       expect(infinitePay.ensureCheckout).toHaveBeenCalledWith(
         expect.any(String),
         baseDto().orderRef,
-        'https://cardapio.app/?loja=tia-nana',
+        'https://cardapio.app/?cardapio=tia-nana',
       );
       expect(result.checkoutUrl).toBe(
         'https://checkout.infinitepay.io/loja/abc',

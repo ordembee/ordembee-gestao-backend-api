@@ -28,7 +28,9 @@ class IsOpeningHours implements ValidatorConstraintInterface {
   }
 }
 
-export const MENU_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,58}[a-z0-9])?$/;
+/** Slug do cardapio: so a-z, 0-9 e hifen (nao nas pontas), ate 50 posicoes. */
+export const MENU_SLUG_MAX = 50;
+export const MENU_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,48}[a-z0-9])?$/;
 
 /** O provedor da entrega se troca em delivery-settings (so o dono: depende das credenciais). */
 export class UpdateMenuDeliveryDto {

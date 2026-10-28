@@ -11,13 +11,13 @@ Uber Direct (entrega + Pix/InfinitePay antecipado), InfinitePay, cardápio na co
 | Tipo | Nome | Valor |
 |---|---|---|
 | secret | `CREDENTIALS_ENCRYPTION_KEY` | `openssl rand -hex 32` (64 hex). **Guarde uma cópia**: trocar a chave depois de salvar credenciais da Uber as invalida. |
-| variável | `UBER_WEBHOOK_PUBLIC_URL` | `https://my-store-cardapio.web.app/v1/webhooks/uber-direct` |
-| variável | `INFINITEPAY_WEBHOOK_PUBLIC_URL` | `https://my-store-cardapio.web.app/v1/webhooks/infinitepay` |
+| variável | `UBER_WEBHOOK_PUBLIC_URL` | `https://ordembee-cardapio-digital.web.app/v1/webhooks/uber-direct` |
+| variável | `INFINITEPAY_WEBHOOK_PUBLIC_URL` | `https://ordembee-cardapio-digital.web.app/v1/webhooks/infinitepay` |
 
 O workflow (`.github/workflows/ci-cd.yml`) grava essas três no `.env.my-store-prd` e **avisa** (`::warning::`) se faltar alguma.
 
 **ordembee-cardapio-web-backend-api**: nada novo, mas confira `MENU_PUBLIC_URL` no environment `production`
-(`https://my-store-cardapio.web.app/`): é para lá que a InfinitePay devolve o cliente depois de pagar.
+(`https://ordembee-cardapio-digital.web.app/`): é para lá que a InfinitePay devolve o cliente depois de pagar.
 
 **Frontends** (painel e cardápio): nenhuma variável nova.
 

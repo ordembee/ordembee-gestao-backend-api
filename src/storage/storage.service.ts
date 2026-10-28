@@ -86,10 +86,12 @@ export class StorageService {
     path: string,
     data: unknown,
     maxAgeSeconds = 60,
+    ownerId?: string,
   ): Promise<string> {
     return this.savePublic(path, Buffer.from(JSON.stringify(data)), {
       contentType: 'application/json; charset=utf-8',
       cacheControl: `public, max-age=${maxAgeSeconds}`,
+      ...(ownerId ? { metadata: { ownerId } } : {}),
     });
   }
 
@@ -101,10 +103,78 @@ export class StorageService {
     await this.bucket.file(path).delete({ ignoreNotFound: true });
   }
 
+  /**
+   * Apaga o arquivo so se ele foi gravado por `ownerId` (metadado `ownerId`).
+   * O caminho e derivado de um endereco que pode trocar de dono: sem essa
+   * conferencia, quem largou o endereco apagaria o arquivo de quem o assumiu.
+   * `ifGenerationMatch` fecha a janela entre ler o dono e apagar.
+   * Arquivo ausente = nada a fazer; sem dono gravado = nao e nosso, nao apaga.
+   */
+  async deleteFileIfOwner(path: string, ownerId: string): Promise<boolean> {
+    const file = this.bucket.file(path);
+    let meta: {
+      generation?: string | number;
+      metadata?: Record<string, unknown>;
+    };
+    try {
+      [meta] = await file.getMetadata();
+    } catch (err) {
+      if ((err as { code?: number }).code === 404) return false;
+      throw err;
+    }
+    if (meta.metadata?.ownerId !== ownerId) {
+      this.logger.warn(`Arquivo ${path} nao e do dono ${ownerId}: mantido`);
+      return false;
+    }
+    try {
+      await file.delete({ ifGenerationMatch: meta.generation });
+    } catch (err) {
+      // 404: ja sumiu. 412: foi sobrescrito por outro dono no meio do caminho.
+      const code = (err as { code?: number }).code;
+      if (code === 404 || code === 412) return false;
+      throw err;
+    }
+    return true;
+  }
+
+  /**
+   * Apaga o arquivo se ele NAO foi gravado por `ownerId` (ou nao tem dono).
+   * Usado ao assumir um endereco: o que estiver la e resto de quem o largou.
+   */
+  async deleteFileIfNotOwner(path: string, ownerId: string): Promise<boolean> {
+    const file = this.bucket.file(path);
+    let meta: {
+      generation?: string | number;
+      metadata?: Record<string, unknown>;
+    };
+    try {
+      [meta] = await file.getMetadata();
+    } catch (err) {
+      if ((err as { code?: number }).code === 404) return false;
+      throw err;
+    }
+    if (meta.metadata?.ownerId === ownerId) return false;
+    try {
+      await file.delete({ ifGenerationMatch: meta.generation });
+    } catch (err) {
+      const code = (err as { code?: number }).code;
+      if (code === 404 || code === 412) return false;
+      throw err;
+    }
+    this.logger.warn(
+      `Arquivo ${path} de outro dono removido ao assumir o endereco`,
+    );
+    return true;
+  }
+
   private async savePublic(
     path: string,
     data: Buffer,
-    metadata: { contentType: string; cacheControl: string } = {
+    metadata: {
+      contentType: string;
+      cacheControl: string;
+      metadata?: Record<string, string>;
+    } = {
       contentType: 'image/webp',
       cacheControl: 'public, max-age=31536000',
     },
