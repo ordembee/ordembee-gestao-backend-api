@@ -53,7 +53,7 @@ import {
   verifyUberSignature,
 } from './uber-direct.util';
 
-/** Motivos que o my-store-cardapio-web-back-api traduz para o cliente. */
+/** Motivos que o ordembee-cardapio-web-backend-api traduz para o cliente. */
 export type DeliveryQuoteRejection =
   | 'DELIVERY_UNAVAILABLE'
   | 'DELIVERY_DISABLED'
@@ -635,7 +635,7 @@ export class UberDirectService {
   }
 
   /**
-   * Webhook da Uber, repassado pelo my-store-cardapio-web-back-api (rota
+   * Webhook da Uber, repassado pelo ordembee-cardapio-web-backend-api (rota
    * interna). A assinatura da Uber e conferida com a chave da loja dona da
    * corrida — por isso o pedido e achado antes.
    */

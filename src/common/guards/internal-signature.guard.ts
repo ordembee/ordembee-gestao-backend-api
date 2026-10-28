@@ -14,7 +14,7 @@ export const INTERNAL_SIGNATURE_MAX_SKEW_MS = 5 * 60 * 1000;
 /** Segredo curto demais e quebravel por forca bruta: a rota interna fica fechada. */
 export const INTERNAL_SECRET_MIN_LENGTH = 32;
 
-/** `hex(HMAC-SHA256(secret, "${timestamp}.${rawBody}"))` — mesmo calculo do my-store-cardapio-web-back-api. */
+/** `hex(HMAC-SHA256(secret, "${timestamp}.${rawBody}"))` — mesmo calculo do ordembee-cardapio-web-backend-api. */
 export function signInternalRequest(
   secret: string,
   timestamp: string,
@@ -57,7 +57,7 @@ export function internalSigningPayload(
 }
 
 /**
- * Autentica chamadas servico-a-servico (hoje: my-store-cardapio-web-back-api -> backend-api).
+ * Autentica chamadas servico-a-servico (hoje: ordembee-cardapio-web-backend-api -> backend-api).
  * Exige `X-Internal-Timestamp` (epoch ms) e `X-Internal-Signature` calculada
  * sobre o corpo CRU — por isso o app precisa de `rawBody` (ver main.ts/firebase.ts).
  * Sem `INTERNAL_API_SECRET` configurado, tudo e recusado.

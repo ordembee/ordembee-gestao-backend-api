@@ -3,7 +3,7 @@ import type { MenuOpeningHours } from './schemas/menu-online.schema';
 
 /**
  * Formato do JSON publicado em `menus/{slug}.json` e lido pelo cardapio e pelo
- * my-store-cardapio-web-back-api. E um contrato publico: nunca coloque custo, estoque
+ * ordembee-cardapio-web-backend-api. E um contrato publico: nunca coloque custo, estoque
  * numerico, precificacao ou qualquer dado interno aqui.
  */
 export interface MenuSnapshotOption {

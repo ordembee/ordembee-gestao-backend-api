@@ -46,7 +46,7 @@ export class StructuredAddressDto {
   complement?: string;
 }
 
-/** `POST /internal/menus/:slug/delivery-quote` (vem do my-store-cardapio-web-back-api). */
+/** `POST /internal/menus/:slug/delivery-quote` (vem do ordembee-cardapio-web-backend-api). */
 export class MenuDeliveryQuoteDto {
   @ValidateNested()
   @Type(() => StructuredAddressDto)

@@ -108,7 +108,7 @@ export class OrderUberDeliveryController {
 }
 
 /**
- * Webhook da Uber Direct. A Uber chama o my-store-cardapio-web-back-api
+ * Webhook da Uber Direct. A Uber chama o ordembee-cardapio-web-backend-api
  * (publico), que repassa o corpo CRU aqui com a assinatura interna; a
  * assinatura da Uber (`X-Uber-Signature`) vem junto e e conferida no servico.
  */

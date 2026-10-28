@@ -21,7 +21,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * Entrada dos pedidos do cardapio digital. NAO e publica: so o
- * my-store-cardapio-web-back-api, com a assinatura HMAC, chega aqui (`@InternalRoute`).
+ * ordembee-cardapio-web-backend-api, com a assinatura HMAC, chega aqui (`@InternalRoute`).
  */
 @Controller('internal/menu-orders')
 @InternalRoute()
@@ -51,7 +51,7 @@ export class InternalMenuOrdersController {
 
 /**
  * Canal "ao vivo" do cardapio (disponibilidade, descricao e foto). Tambem so
- * para o my-store-cardapio-web-back-api, que serve ao publico com cache curto.
+ * para o ordembee-cardapio-web-backend-api, que serve ao publico com cache curto.
  */
 @Controller('internal/menus')
 @InternalRoute()

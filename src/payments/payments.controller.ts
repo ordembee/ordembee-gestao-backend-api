@@ -59,7 +59,7 @@ export class OrderInfinitePayController {
 }
 
 /**
- * Webhook da InfinitePay. Ela chama o my-store-cardapio-web-back-api (publico),
+ * Webhook da InfinitePay. Ela chama o ordembee-cardapio-web-backend-api (publico),
  * que repassa para ca com a assinatura interna. O corpo nao e assinado pela
  * InfinitePay: ele so aponta o pedido, e o pagamento e confirmado por consulta.
  */

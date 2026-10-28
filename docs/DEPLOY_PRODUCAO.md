@@ -6,7 +6,7 @@ Uber Direct (entrega + Pix/InfinitePay antecipado), InfinitePay, cardápio na co
 
 ## 1. Antes de publicar (GitHub → Settings → Environments → `production`)
 
-**my-store-back-api** (já existem: `MONGODB_URI`, `FRONTEND_URL`, `INTERNAL_API_SECRET`, `FIREBASE_SERVICE_ACCOUNT`)
+**ordembee-gestao-backend-api** (já existem: `MONGODB_URI`, `FRONTEND_URL`, `INTERNAL_API_SECRET`, `FIREBASE_SERVICE_ACCOUNT`)
 
 | Tipo | Nome | Valor |
 |---|---|---|
@@ -16,7 +16,7 @@ Uber Direct (entrega + Pix/InfinitePay antecipado), InfinitePay, cardápio na co
 
 O workflow (`.github/workflows/ci-cd.yml`) grava essas três no `.env.my-store-prd` e **avisa** (`::warning::`) se faltar alguma.
 
-**my-store-cardapio-web-back-api**: nada novo, mas confira `MENU_PUBLIC_URL` no environment `production`
+**ordembee-cardapio-web-backend-api**: nada novo, mas confira `MENU_PUBLIC_URL` no environment `production`
 (`https://my-store-cardapio.web.app/`): é para lá que a InfinitePay devolve o cliente depois de pagar.
 
 **Frontends** (painel e cardápio): nenhuma variável nova.
@@ -27,7 +27,7 @@ O backend novo lê o cardápio de `menuonlines` e as integrações de `businesse
 (o backend antigo continua funcionando com `businesses.menu`).
 
 ```bash
-cd my-store-back-api            # com MONGODB_URI de produção no .env (cuidado: o .env local aponta para o Atlas de testes)
+cd ordembee-gestao-backend-api            # com MONGODB_URI de produção no .env (cuidado: o .env local aponta para o Atlas de testes)
 npx ts-node -r tsconfig-paths/register scripts/migrate-menu-online.ts            # só mostra o plano — confira
 npx ts-node -r tsconfig-paths/register scripts/migrate-menu-online.ts --apply    # grava
 ```
@@ -36,9 +36,9 @@ Depois que o backend novo estiver no ar e o cardápio funcionando: `... --cleanu
 
 ## 3. Ordem de publicação
 
-1. **my-store-back-api** (push em `main` publica direto em produção — não há branch `staging`).
-2. **my-store-cardapio-web-back-api** (gateway): `staging` → conferir → PR para `main`.
-3. **my-store-cardapio-web-frontend**: `staging` → conferir → PR para `main`.
+1. **ordembee-gestao-backend-api** (push em `main` publica direto em produção — não há branch `staging`).
+2. **ordembee-cardapio-web-backend-api** (gateway): `staging` → conferir → PR para `main`.
+3. **ordembee-cardapio-web-frontend-app**: `staging` → conferir → PR para `main`.
 4. **frontend** (painel): push em `main`.
 
 Atenção: o gateway novo **não tem mais** a rota `GET /v1/menus/:slug/live` (disponibilidade "ao vivo"). Publique o gateway e o

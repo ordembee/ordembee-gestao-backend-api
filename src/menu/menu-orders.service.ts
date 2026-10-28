@@ -59,7 +59,7 @@ import {
   MenuSnapshotOptionGroup,
 } from './menu-snapshot';
 
-/** Motivos de recusa que o my-store-cardapio-web-back-api traduz para o cliente. */
+/** Motivos de recusa que o ordembee-cardapio-web-backend-api traduz para o cliente. */
 export type MenuOrderRejection =
   | 'QUOTE_REQUIRED'
   | 'STORE_CLOSED'
@@ -135,7 +135,7 @@ export function resolveChosenOptions(
 }
 
 /**
- * Resposta ao my-store-cardapio-web-back-api. Pagamento antecipado: `checkoutUrl`
+ * Resposta ao ordembee-cardapio-web-backend-api. Pagamento antecipado: `checkoutUrl`
  * (InfinitePay) ou `pix` (copia e cola estatico). Com a InfinitePay ativa e o
  * link ainda sem sair, `onlinePayment` avisa que o link deve ser pedido depois.
  */
@@ -210,7 +210,7 @@ function toCustomerAddress(
 
 /**
  * Pedido do cardapio digital, recebido pela rota interna assinada. Tudo e
- * revalidado aqui (defesa em profundidade), mesmo que o my-store-cardapio-web-back-api ja
+ * revalidado aqui (defesa em profundidade), mesmo que o ordembee-cardapio-web-backend-api ja
  * tenha validado contra o JSON publicado: o banco e a fonte da verdade —
  * inclusive dos precos.
  */
@@ -593,7 +593,7 @@ export class MenuOrdersService {
     if (
       payment.method === PaymentMethod.DINHEIRO &&
       payment.changeFor !== undefined &&
-      // Mesma regra do my-store-cardapio-web-back-api: troco "para" o valor exato nao faz sentido.
+      // Mesma regra do ordembee-cardapio-web-backend-api: troco "para" o valor exato nao faz sentido.
       payment.changeFor <= estimatedTotal
     ) {
       throw new BadRequestException(

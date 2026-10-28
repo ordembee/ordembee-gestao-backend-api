@@ -62,7 +62,7 @@ jobs:
           MONGODB_URI=${{ secrets.MONGODB_URI }}
           FRONTEND_URL=${{ secrets.FRONTEND_URL }}
           EOF
-          # Rota interna do cardápio digital (/internal/*): mesmo valor do my-store-cardapio-web-back-api.
+          # Rota interna do cardápio digital (/internal/*): mesmo valor do ordembee-cardapio-web-backend-api.
           # Sem ele (ou com menos de 32 caracteres) a rota interna fica fechada (401); o resto da API funciona.
           if [ "${#INTERNAL_API_SECRET}" -lt 32 ]; then
             echo "::warning::INTERNAL_API_SECRET ausente ou curto: pedidos e 'ao vivo' do cardápio não vão funcionar em produção"
@@ -76,7 +76,7 @@ jobs:
           else
             echo "CREDENTIALS_ENCRYPTION_KEY=$CREDENTIALS_ENCRYPTION_KEY" >> .env.my-store-prd
           fi
-          # Enderecos publicos (my-store-cardapio-web-back-api) que a Uber e a InfinitePay chamam.
+          # Enderecos publicos (ordembee-cardapio-web-backend-api) que a Uber e a InfinitePay chamam.
           # Sem o da InfinitePay o pagamento so e confirmado ao cliente voltar do checkout ou pelo botao "Verificar pagamento".
           if [ -n "$UBER_WEBHOOK_PUBLIC_URL" ]; then
             echo "UBER_WEBHOOK_PUBLIC_URL=$UBER_WEBHOOK_PUBLIC_URL" >> .env.my-store-prd

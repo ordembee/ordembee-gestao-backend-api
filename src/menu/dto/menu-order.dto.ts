@@ -26,7 +26,7 @@ import { PaymentMethod } from '../../common/enums/payment-method.enum';
 import { MENU_SLUG_PATTERN } from './update-menu-settings.dto';
 
 /**
- * Tetos do pedido do cardapio (mesmos valores do my-store-cardapio-web-back-api): ate 10
+ * Tetos do pedido do cardapio (mesmos valores do ordembee-cardapio-web-backend-api): ate 10
  * unidades de cada produto, somando as linhas, e ate 20 itens no total.
  */
 export const MAX_UNITS_PER_PRODUCT = 10;
@@ -162,7 +162,7 @@ class MenuOrderItemDto {
   notes?: string;
 }
 
-/** Contrato da rota interna `POST /internal/menu-orders` (enviado pelo my-store-cardapio-web-back-api). */
+/** Contrato da rota interna `POST /internal/menu-orders` (enviado pelo ordembee-cardapio-web-backend-api). */
 export class MenuOrderDto {
   @Matches(MENU_SLUG_PATTERN)
   slug: string;

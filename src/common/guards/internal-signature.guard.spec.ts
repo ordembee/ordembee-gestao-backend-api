@@ -40,8 +40,8 @@ describe('InternalSignatureGuard', () => {
     expect(guard().canActivate(ctx)).toBe(true);
   });
 
-  it('usa exatamente hex(HMAC-SHA256(secret, "ts.body")) — contrato com o my-store-cardapio-web-back-api', () => {
-    // Valor fixo: se mudar, o my-store-cardapio-web-back-api para de conseguir assinar.
+  it('usa exatamente hex(HMAC-SHA256(secret, "ts.body")) — contrato com o ordembee-cardapio-web-backend-api', () => {
+    // Valor fixo: se mudar, o ordembee-cardapio-web-backend-api para de conseguir assinar.
     expect(signInternalRequest('abc', '1700000000000', '{}')).toBe(
       '6f018a0fd0914835a1092a6ffc6346f695b8aaaa8adb787d90388093e76687cf',
     );
@@ -134,7 +134,7 @@ describe('InternalSignatureGuard', () => {
       ).toBe('GET /internal/menus/tia/live');
     });
 
-    it('vetor fixo do contrato GET com o my-store-cardapio-web-back-api', () => {
+    it('vetor fixo do contrato GET com o ordembee-cardapio-web-backend-api', () => {
       expect(
         signInternalRequest(
           'abc',
@@ -146,7 +146,7 @@ describe('InternalSignatureGuard', () => {
       );
     });
 
-    it('vetor fixo do contrato POST com o my-store-cardapio-web-back-api', () => {
+    it('vetor fixo do contrato POST com o ordembee-cardapio-web-backend-api', () => {
       const payload = internalSigningPayload(
         'POST',
         '/api/v1/internal/menu-orders',
