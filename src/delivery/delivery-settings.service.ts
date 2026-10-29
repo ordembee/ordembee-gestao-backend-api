@@ -42,9 +42,8 @@ const hint = (plain: string) => plain.slice(-4);
 /** O que falta para a loja poder ligar a Uber (vazio = pronto). */
 export function uberMissing(
   uber: UberDirectSettings | undefined,
-  pix: PixSettings | undefined,
-  /** InfinitePay ativa recebe o pagamento antecipado no lugar do Pix estatico. */
-  onlinePayment = false,
+  /** InfiniteTag cadastrada: a Uber cobra antes pela InfinitePay (Pix estatico nao serve). */
+  hasInfinitePayHandle: boolean,
 ): string[] {
   const missing: string[] = [];
   if (!uber?.customerId) missing.push('Customer ID');
@@ -52,7 +51,7 @@ export function uberMissing(
   if (!uber?.clientSecretEnc) missing.push('Client secret');
   if (!uber?.pickupAddress) missing.push('endereço de coleta');
   if (!uber?.pickupPhone) missing.push('telefone de coleta');
-  if (!onlinePayment && !pix?.key) missing.push('chave Pix ou InfinitePay');
+  if (!hasInfinitePayHandle) missing.push('InfiniteTag');
   return missing;
 }
 
@@ -112,11 +111,7 @@ export class DeliverySettingsService {
         pickupPhone: uber?.pickupPhone ?? '',
         pickupNotes: uber?.pickupNotes ?? '',
       },
-      missing: uberMissing(
-        uber,
-        config?.pix,
-        infinitePayActive(config?.infinitepay),
-      ),
+      missing: uberMissing(uber, !!config?.infinitepay?.handle),
       /** Endereco que a loja cadastra no painel da Uber (Webhooks). */
       webhookUrl: process.env.UBER_WEBHOOK_PUBLIC_URL || null,
     };
@@ -206,13 +201,7 @@ export class DeliverySettingsService {
       );
     }
     if (provider === DeliveryProvider.UBER) {
-      const pix =
-        (set['config.pix'] as PixSettings | undefined) ?? current?.pix;
-      const missing = uberMissing(
-        nextUber,
-        pix,
-        infinitePayActive(current?.infinitepay),
-      );
+      const missing = uberMissing(nextUber, !!current?.infinitepay?.handle);
       if (missing.length) {
         throw new BadRequestException(
           `Para entregar pela Uber, preencha: ${missing.join(', ')}`,

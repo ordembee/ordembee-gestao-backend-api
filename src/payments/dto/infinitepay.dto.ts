@@ -5,7 +5,7 @@ export class UpdateInfinitePaySettingsDto {
   /** InfiniteTag, com ou sem o `$`. */
   @IsOptional()
   @IsString()
-  @MaxLength(61)
+  @MaxLength(51)
   handle?: string;
 
   @IsOptional()

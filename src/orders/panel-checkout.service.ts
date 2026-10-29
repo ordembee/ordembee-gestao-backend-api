@@ -88,7 +88,7 @@ export class PanelCheckoutService {
       uber:
         deliveryOn &&
         viaUber &&
-        uberMissing(business?.config?.uber, undefined, true).length === 0,
+        uberMissing(business?.config?.uber, true).length === 0,
       infinitePay: await this.infinitePay.isActive(businessId),
     };
   }

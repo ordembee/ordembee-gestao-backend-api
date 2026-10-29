@@ -1,6 +1,8 @@
 /** Regras puras da InfinitePay (sem rede, sem banco) — testaveis isoladamente. */
 
-export const INFINITEPAY_HANDLE = /^[A-Za-z0-9][A-Za-z0-9._-]{1,59}$/;
+/** Mesmas regras do slug (2 a 50, sem espaco nem simbolo nas pontas), mantendo caixa, `.` e `_` que a InfinitePay aceita. */
+export const INFINITEPAY_HANDLE =
+  /^[A-Za-z0-9][A-Za-z0-9._-]{0,48}[A-Za-z0-9]$/;
 
 /** '$minha-loja' / ' Minha-Loja ' -> 'Minha-Loja' (a API quer sem o `$`). */
 export function normalizeHandle(raw: string): string {

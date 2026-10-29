@@ -106,7 +106,7 @@ export class InfinitePayService {
       dto.handle !== undefined ? normalizeHandle(dto.handle) : current;
     if (handle && !INFINITEPAY_HANDLE.test(handle)) {
       throw new BadRequestException(
-        'InfiniteTag inválida. Use só letras, números, ponto, hífen ou sublinhado (sem o $).',
+        'InfiniteTag inválida. Use só letras, números, ponto, hífen ou sublinhado, sem espaços e até 50 caracteres (sem o $).',
       );
     }
     const enabled = dto.enabled ?? (await this.getSettings(businessId)).enabled;

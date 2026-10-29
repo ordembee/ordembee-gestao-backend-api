@@ -1,4 +1,5 @@
 import {
+  INFINITEPAY_HANDLE,
   buildLinkItems,
   methodOfCapture,
   normalizeHandle,
@@ -8,6 +9,21 @@ import {
 } from './infinitepay.util';
 
 describe('infinitepay.util', () => {
+  it('INFINITEPAY_HANDLE: sem espaço, até 50, sem símbolo nas pontas', () => {
+    const ok = ['tia-nana', 'Maria_Doces', 'loja.sp', 'ab', 'a'.repeat(50)];
+    const bad = [
+      'paradadadadad adasdadlakdkajsdlkajdkad dsd',
+      'a'.repeat(51),
+      '-loja',
+      'loja-',
+      'x',
+      'lojá',
+      '$loja',
+    ];
+    for (const h of ok) expect(INFINITEPAY_HANDLE.test(h)).toBe(true);
+    for (const h of bad) expect(INFINITEPAY_HANDLE.test(h)).toBe(false);
+  });
+
   it('normalizeHandle tira o $ e espaços', () => {
     expect(normalizeHandle(' $tia-nana ')).toBe('tia-nana');
   });
