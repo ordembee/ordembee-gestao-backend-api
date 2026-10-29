@@ -175,11 +175,11 @@ export class MenuLabelText {
   @Prop()
   description?: string;
 
-  /** Linha pequena acima do titulo ("Feito hoje, com carinho"). */
+  /** Linha pequena acima do titulo ("Qualidade que você confia"). */
   @Prop()
   highlightLabel?: string;
 
-  /** Titulo acima das categorias ("O que vai adoçar seu dia?"). */
+  /** Titulo acima das categorias ("Conheça nossos destaques"). */
   @Prop()
   highlightTitle?: string;
 }
