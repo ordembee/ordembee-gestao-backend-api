@@ -60,7 +60,7 @@ jobs:
         run: |
           cat <<EOF > .env.my-store-prd
           MONGODB_URI=${{ secrets.MONGODB_URI }}
-          FRONTEND_URL=${{ secrets.FRONTEND_URL }}
+          FRONTEND_URL=${{ vars.FRONTEND_URL || secrets.FRONTEND_URL }}
           EOF
           # Rota interna do cardápio digital (/internal/*): mesmo valor do ordembee-cardapio-web-backend-api.
           # Sem ele (ou com menos de 32 caracteres) a rota interna fica fechada (401); o resto da API funciona.
