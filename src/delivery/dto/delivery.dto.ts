@@ -46,6 +46,14 @@ export class StructuredAddressDto {
   complement?: string;
 }
 
+/** `POST /menu/delivery-origin`: sem endereço, usa o endereço cadastrado da loja. */
+export class DeliveryOriginDto {
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => StructuredAddressDto)
+  address?: StructuredAddressDto;
+}
+
 /** `POST /internal/menus/:slug/delivery-quote` (vem do ordembee-cardapio-web-backend-api). */
 export class MenuDeliveryQuoteDto {
   @ValidateNested()

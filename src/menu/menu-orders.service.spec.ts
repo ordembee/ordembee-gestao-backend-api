@@ -49,6 +49,9 @@ function stored(business: any) {
           deliveryProvider: m.deliveryProvider,
           deliveryFee: m.deliveryFee,
           deliveryEnabled: m.deliveryEnabled,
+          ownTiers: m.ownTiers,
+          ownOnlinePayment: m.ownOnlinePayment,
+          quoteAfterOrder: m.quoteAfterOrder,
           pickupEnabled: m.pickupEnabled,
         },
       },
@@ -130,10 +133,12 @@ function setup(
     })),
   };
   const uberDirect = {
-    acceptMenuQuote: jest.fn(async (_b: unknown, quoteId: string) => {
-      if (over.quoteError) throw over.quoteError;
-      return { quoteId, fee: over.quoteFee ?? 12.5 };
-    }),
+    acceptMenuQuote: jest.fn(
+      async (_b: unknown, quoteId: string, _address?: unknown) => {
+        if (over.quoteError) throw over.quoteError;
+        return { quoteId, fee: over.quoteFee ?? 12.5 };
+      },
+    ),
   };
   const infinitePay = {
     ensureCheckout: jest.fn(async () => {
@@ -874,5 +879,307 @@ describe('MenuOrdersService.create — entrega pela Uber', () => {
         'https://checkout.infinitepay.io/loja/zzz',
       );
     });
+  });
+});
+
+describe('MenuOrdersService.create — entrega própria por distância', () => {
+  const tiersBusiness = (over: any = {}) => ({
+    _id: new Types.ObjectId(),
+    timezone: 'America/Sao_Paulo',
+    menu: {
+      enabled: true,
+      deliveryFee: 6,
+      ownTiers: [
+        { maxKm: 1, fee: 6.9 },
+        { maxKm: 3, fee: 9.9 },
+      ],
+      acceptedPayments: ['DINHEIRO', 'PIX'],
+      pickupEnabled: true,
+      openingHours: { '5': ['11:00', '23:00'] },
+      items: [{ productId: bolo, active: true }],
+      ...over,
+    },
+  });
+  const dto = (over: any = {}) =>
+    baseDto({
+      address: {
+        cep: '20040-020',
+        street: 'Rua da Assembleia',
+        number: '10',
+        district: 'Centro',
+        city: 'Rio de Janeiro',
+        state: 'rj',
+      },
+      payment: { method: PaymentMethod.DINHEIRO },
+      quoteId: 'cot-1',
+      ...over,
+    });
+
+  it('cobra a taxa da cotação, não a taxa fixa, e segue pagando na entrega', async () => {
+    const { service, ordersService, uberDirect } = setup({
+      business: tiersBusiness(),
+      quoteFee: 9.9,
+    });
+    await service.create(dto() as any, NOW);
+
+    expect(uberDirect.acceptMenuQuote.mock.calls[0][1]).toBe('cot-1');
+    expect(uberDirect.acceptMenuQuote.mock.calls[0][2]).toMatchObject({
+      state: 'RJ',
+      city: 'Rio de Janeiro',
+    });
+    const input = ordersService.createFromMenu.mock.calls[0][0];
+    expect(input.deliveryFee).toBe(9.9);
+    expect(input.delivery).toBeUndefined();
+    expect(input.requestedPayment.prepaid).toBeUndefined();
+    expect(input.requestedPayment.method).toBe('DINHEIRO');
+  });
+
+  it('sem cotação, pede para calcular a taxa', async () => {
+    const { service, ordersService } = setup({ business: tiersBusiness() });
+    await expect(
+      service.create(dto({ quoteId: undefined }) as any, NOW),
+    ).rejects.toMatchObject({ response: { reason: 'QUOTE_REQUIRED' } });
+    expect(ordersService.createFromMenu).not.toHaveBeenCalled();
+  });
+
+  it('cotação de outro endereço ou vencida não passa', async () => {
+    const err = Object.assign(new Error('x'), {
+      response: { reason: 'QUOTE_MISMATCH' },
+    });
+    const { service, ordersService } = setup({
+      business: tiersBusiness(),
+      quoteError: err,
+    });
+    await expect(service.create(dto() as any, NOW)).rejects.toBe(err);
+    expect(ordersService.createFromMenu).not.toHaveBeenCalled();
+  });
+
+  it('exige CEP, cidade e UF para localizar a entrega', async () => {
+    const { service } = setup({ business: tiersBusiness() });
+    await expect(
+      service.create(
+        dto({
+          address: { street: 'Rua A', number: '1', district: 'Centro' },
+        }) as any,
+        NOW,
+      ),
+    ).rejects.toThrow(/CEP, cidade e estado/);
+  });
+
+  it('retirada não usa cotação nem cobra taxa', async () => {
+    const { service, ordersService, uberDirect } = setup({
+      business: tiersBusiness(),
+    });
+    await service.create(
+      dto({
+        fulfillment: OrderFulfillment.RETIRADA,
+        address: undefined,
+        quoteId: undefined,
+      }) as any,
+      NOW,
+    );
+    expect(uberDirect.acceptMenuQuote).not.toHaveBeenCalled();
+    expect(ordersService.createFromMenu.mock.calls[0][0].deliveryFee).toBe(0);
+  });
+
+  it('sem faixas continua com a taxa fixa', async () => {
+    const { service, ordersService, uberDirect } = setup({
+      business: tiersBusiness({ ownTiers: [] }),
+    });
+    await service.create(
+      baseDto({ payment: { method: PaymentMethod.DINHEIRO } }) as any,
+      NOW,
+    );
+    expect(uberDirect.acceptMenuQuote).not.toHaveBeenCalled();
+    expect(ordersService.createFromMenu.mock.calls[0][0].deliveryFee).toBe(6);
+  });
+});
+
+describe('MenuOrdersService.create — entrega própria com pagamento online', () => {
+  const addr = {
+    cep: '21630-240',
+    street: 'Rua das Flores',
+    number: '120',
+    district: 'Centro',
+  };
+  const onlineBusiness = (over: any = {}) => ({
+    _id: new Types.ObjectId(),
+    timezone: 'America/Sao_Paulo',
+    menu: {
+      enabled: true,
+      deliveryFee: 6,
+      ownOnlinePayment: true,
+      acceptedPayments: ['DINHEIRO'],
+      infinitepay: { handle: 'minha-loja', enabled: true },
+      pickupEnabled: true,
+      openingHours: { '5': ['11:00', '23:00'] },
+      items: [{ productId: bolo, active: true }],
+      ...over,
+    },
+  });
+
+  it('cobra a taxa fixa, marca pago antes e devolve o link da InfinitePay', async () => {
+    const { service, ordersService, infinitePay } = setup({
+      business: onlineBusiness(),
+    });
+    const result = await service.create(baseDto({ address: addr }) as any, NOW);
+
+    const input = ordersService.createFromMenu.mock.calls[0][0];
+    expect(input.deliveryFee).toBe(6);
+    expect(input.delivery).toBeUndefined();
+    expect(input.requestedPayment).toMatchObject({
+      method: 'PIX',
+      prepaid: true,
+    });
+    expect(input.notes).toContain('pagamento pela InfinitePay');
+    expect(infinitePay.ensureCheckout).toHaveBeenCalled();
+    expect(result).toMatchObject({
+      checkoutUrl: 'https://checkout.infinitepay.io/loja/abc',
+    });
+  });
+
+  it('não depende das formas aceitas na entrega (Pix é o pagamento online)', async () => {
+    const { service } = setup({
+      business: onlineBusiness({ acceptedPayments: ['DINHEIRO'] }),
+    });
+    await expect(service.create(baseDto({ address: addr }) as any, NOW)).resolves.toBeDefined();
+  });
+
+  it('sem Pix no pedido, recusa', async () => {
+    const { service } = setup({ business: onlineBusiness() });
+    await expect(
+      service.create(
+        baseDto({ payment: { method: PaymentMethod.DINHEIRO } }) as any,
+        NOW,
+      ),
+    ).rejects.toThrow(/paga antes/);
+  });
+
+  it('InfinitePay desligada depois: a loja não recebe entrega online', async () => {
+    const { service, ordersService } = setup({
+      business: onlineBusiness({
+        infinitepay: { handle: 'minha-loja', enabled: false },
+      }),
+    });
+    await expect(service.create(baseDto({ address: addr }) as any, NOW)).rejects.toMatchObject({
+      response: { reason: 'MENU_DISABLED' },
+    });
+    expect(ordersService.createFromMenu).not.toHaveBeenCalled();
+  });
+
+  it('retirada continua paga no balcão', async () => {
+    const { service, ordersService, infinitePay } = setup({
+      business: onlineBusiness(),
+    });
+    await service.create(
+      baseDto({
+        fulfillment: OrderFulfillment.RETIRADA,
+        address: undefined,
+        payment: { method: PaymentMethod.DINHEIRO },
+      }) as any,
+      NOW,
+    );
+    const input = ordersService.createFromMenu.mock.calls[0][0];
+    expect(input.requestedPayment.prepaid).toBeUndefined();
+    expect(infinitePay.ensureCheckout).not.toHaveBeenCalled();
+  });
+
+  it('com faixas por distância, usa a taxa da cotação e também paga antes', async () => {
+    const { service, ordersService, uberDirect } = setup({
+      business: onlineBusiness({ ownTiers: [{ maxKm: 3, fee: 9.9 }] }),
+      quoteFee: 9.9,
+    });
+    await service.create(
+      baseDto({
+        address: {
+          cep: '20040-020',
+          street: 'Rua A',
+          number: '10',
+          district: 'Centro',
+          city: 'Rio',
+          state: 'RJ',
+        },
+        quoteId: 'cot-1',
+      }) as any,
+      NOW,
+    );
+    expect(uberDirect.acceptMenuQuote).toHaveBeenCalled();
+    const input = ordersService.createFromMenu.mock.calls[0][0];
+    expect(input.deliveryFee).toBe(9.9);
+    expect(input.requestedPayment.prepaid).toBe(true);
+  });
+});
+
+describe('MenuOrdersService.create — taxa cotada depois do pedido', () => {
+  const addr = {
+    cep: '21630-240',
+    street: 'Rua das Flores',
+    number: '120',
+    district: 'Centro',
+  };
+  const later = (over: any = {}) => ({
+    _id: new Types.ObjectId(),
+    timezone: 'America/Sao_Paulo',
+    menu: {
+      enabled: true,
+      deliveryFee: 6,
+      ownOnlinePayment: true,
+      quoteAfterOrder: true,
+      ownTiers: [{ maxKm: 3, fee: 9 }],
+      acceptedPayments: ['DINHEIRO'],
+      infinitepay: { handle: 'minha-loja', enabled: true },
+      pickupEnabled: true,
+      openingHours: { '5': ['11:00', '23:00'] },
+      items: [{ productId: bolo, active: true }],
+      ...over,
+    },
+  });
+
+  it('cria o pedido sem taxa e sem link, marcando a taxa como pendente', async () => {
+    const { service, ordersService, infinitePay } = setup({ business: later() });
+    const result = await service.create(
+      baseDto({ address: addr }) as any,
+      NOW,
+    );
+
+    const input = ordersService.createFromMenu.mock.calls[0][0];
+    expect(input.deliveryFee).toBe(0);
+    expect(input.deliveryFeePending).toBe(true);
+    expect(input.requestedPayment).toMatchObject({ prepaid: true });
+    expect(infinitePay.ensureCheckout).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ feePending: true });
+    expect(result).not.toHaveProperty('checkoutUrl');
+  });
+
+  it('ignora as faixas de distância (não exige cotação do cliente)', async () => {
+    const { service } = setup({ business: later() });
+    await expect(
+      service.create(baseDto({ address: addr }) as any, NOW),
+    ).resolves.toBeDefined();
+  });
+
+  it('exige o CEP: ele vai no link de pagamento', async () => {
+    const { service } = setup({ business: later() });
+    await expect(
+      service.create(
+        baseDto({ address: { ...addr, cep: undefined } }) as any,
+        NOW,
+      ),
+    ).rejects.toThrow(/CEP/);
+  });
+
+  it('retirada não é afetada', async () => {
+    const { service, ordersService } = setup({ business: later() });
+    await service.create(
+      baseDto({
+        fulfillment: OrderFulfillment.RETIRADA,
+        address: undefined,
+        payment: { method: PaymentMethod.DINHEIRO },
+      }) as any,
+      NOW,
+    );
+    expect(
+      ordersService.createFromMenu.mock.calls[0][0].deliveryFeePending,
+    ).toBeUndefined();
   });
 });

@@ -31,6 +31,10 @@ export class DeliveryQuote {
   @Prop()
   etaMinutes?: number;
 
+  /** Entrega propria por faixa: km estimados por rua ate o cliente. */
+  @Prop({ min: 0 })
+  distanceKm?: number;
+
   /** Cotacao refeita no despacho (para a encomenda `orderId`). */
   @Prop({ type: Types.ObjectId, ref: 'Order' })
   orderId?: Types.ObjectId;

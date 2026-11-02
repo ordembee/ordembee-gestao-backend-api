@@ -1,4 +1,12 @@
-import { IsBoolean, IsOptional, IsString, MaxLength } from 'class-validator';
+import {
+  IsBoolean,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Max,
+  MaxLength,
+  Min,
+} from 'class-validator';
 
 /** `PUT /menu/infinitepay-settings` — so o dono. */
 export class UpdateInfinitePaySettingsDto {
@@ -59,4 +67,12 @@ export class InternalPaymentDto {
   @IsString()
   @MaxLength(500)
   redirectUrl?: string;
+}
+
+/** Taxa de entrega cotada pelo operador (R$), entrega propria com cotacao depois. */
+export class OrderDeliveryFeeDto {
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(1000)
+  fee: number;
 }

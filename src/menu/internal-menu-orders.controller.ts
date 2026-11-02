@@ -11,6 +11,11 @@ import { InternalRoute } from '../common/decorators/internal-route.decorator';
 import { MenuOrdersService } from './menu-orders.service';
 import { MenuOrderDto } from './dto/menu-order.dto';
 import { UberDirectService } from '../delivery/uber-direct.service';
+import { OwnDeliveryService } from '../delivery/own-delivery.service';
+import { usesDistanceTiers } from '../delivery/own-delivery.util';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
+import { MenuOnline, MenuOnlineDocument } from './schemas/menu-online.schema';
 import {
   MenuDeliveryQuoteDto,
   MenuPaymentClaimDto,
@@ -56,13 +61,29 @@ export class InternalMenuOrdersController {
 @Controller('internal/menus')
 @InternalRoute()
 export class InternalMenusController {
-  constructor(private readonly uberDirect: UberDirectService) {}
+  constructor(
+    private readonly uberDirect: UberDirectService,
+    private readonly ownDelivery: OwnDeliveryService,
+    @InjectModel(MenuOnline.name)
+    private readonly menuModel: Model<MenuOnlineDocument>,
+  ) {}
 
-  /** Frete da Uber para o endereco do checkout (o pedido usa esta cotacao). */
+  /**
+   * Frete para o endereco do checkout (o pedido usa esta cotacao): por
+   * distancia na entrega propria com faixas, senao a cotacao da Uber.
+   */
   @Post(':slug/delivery-quote')
   @HttpCode(200)
-  quote(@Param('slug') slug: string, @Body() dto: MenuDeliveryQuoteDto) {
+  async quote(@Param('slug') slug: string, @Body() dto: MenuDeliveryQuoteDto) {
     if (!SLUG.test(slug)) throw new BadRequestException('Slug inválido');
+    const menu = await this.menuModel
+      .findOne({ slug })
+      .select('store.delivery')
+      .lean<Pick<MenuOnline, 'store'>>()
+      .exec();
+    if (usesDistanceTiers(menu?.store?.delivery)) {
+      return this.ownDelivery.quoteForMenu(slug, dto.address);
+    }
     return this.uberDirect.quoteForMenu(slug, dto.address, dto.subtotal);
   }
 }

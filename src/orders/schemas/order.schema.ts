@@ -476,6 +476,17 @@ export class Order {
   @Prop({ required: true, min: 0, default: 0 })
   deliveryFee: number;
 
+  /**
+   * Entrega propria com taxa cotada depois: o pedido entrou sem taxa e sem link de
+   * pagamento. O operador cota, informa a taxa e so entao o link e gerado.
+   */
+  @Prop()
+  deliveryFeePending?: boolean;
+
+  /** A taxa foi cotada e informada depois do pedido (linha do tempo no gestor). */
+  @Prop()
+  deliveryFeeQuoted?: boolean;
+
   /** itemsTotal + deliveryFee - desconto da campanha. */
   @Prop({ required: true, min: 0 })
   total: number;

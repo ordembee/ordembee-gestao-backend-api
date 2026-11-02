@@ -1,10 +1,12 @@
 import {
+  ArrayMaxSize,
   ArrayMinSize,
   IsArray,
   IsIn,
   IsBoolean,
   IsNumber,
   IsObject,
+  Max,
   IsOptional,
   IsString,
   Matches,
@@ -32,12 +34,43 @@ class IsOpeningHours implements ValidatorConstraintInterface {
 export const MENU_SLUG_MAX = 50;
 export const MENU_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,48}[a-z0-9])?$/;
 
+/** Faixa da entrega propria: ate `maxKm` (km estimados por rua) cobra `fee`. */
+export class MenuDeliveryTierDto {
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0.1)
+  @Max(100)
+  maxKm: number;
+
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  @Max(1000)
+  fee: number;
+}
+
 /** O provedor da entrega se troca em delivery-settings (so o dono: depende das credenciais). */
 export class UpdateMenuDeliveryDto {
   @IsOptional()
   @IsNumber()
   @Min(0)
   deliveryFee?: number;
+
+  /** Faixas por distancia da entrega propria; lista vazia = volta para a taxa fixa. */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  @ValidateNested({ each: true })
+  @Type(() => MenuDeliveryTierDto)
+  ownTiers?: MenuDeliveryTierDto[];
+
+  /** Entrega propria paga antes pela InfinitePay (exige a InfinitePay ativa). */
+  @IsOptional()
+  @IsBoolean()
+  ownOnlinePayment?: boolean;
+
+  /** Taxa cotada pelo operador depois do pedido (exige `ownOnlinePayment`). */
+  @IsOptional()
+  @IsBoolean()
+  quoteAfterOrder?: boolean;
 
   @IsOptional()
   @IsBoolean()

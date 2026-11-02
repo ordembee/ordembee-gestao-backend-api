@@ -77,6 +77,38 @@ export class MenuOptionGroup {
   options: MenuOption[];
 }
 
+/** Faixa da entrega propria: ate `maxKm` (estimados por rua) a taxa e `fee`. */
+@Schema({ _id: false })
+export class MenuDeliveryTier {
+  @Prop({ required: true, min: 0.1 })
+  maxKm: number;
+
+  @Prop({ required: true, min: 0 })
+  fee: number;
+}
+
+/** Ponto de saida das entregas: de onde se mede a distancia ate o cliente. */
+@Schema({ _id: false })
+export class MenuDeliveryOrigin {
+  @Prop({ required: true })
+  lat: number;
+
+  @Prop({ required: true })
+  lng: number;
+
+  /** AUTO = do endereco da loja; MANUAL = outro endereco escolhido pelo dono. */
+  @Prop({ required: true, enum: ['AUTO', 'MANUAL'] })
+  source: 'AUTO' | 'MANUAL';
+
+  /** Quao perto do endereco o ponto esta (ADDRESS | STREET | CEP). */
+  @Prop({ required: true, enum: ['ADDRESS', 'STREET', 'CEP'] })
+  precision: 'ADDRESS' | 'STREET' | 'CEP';
+
+  /** Endereco legivel que gerou o ponto (so para o dono conferir). */
+  @Prop()
+  label?: string;
+}
+
 /** Como o cliente recebe o pedido. Sem entrega e sem retirada nao ha como pedir. */
 @Schema({ _id: false })
 export class MenuDelivery {
@@ -88,9 +120,34 @@ export class MenuDelivery {
   })
   deliveryProvider: DeliveryProvider;
 
-  /** Taxa fixa da entrega propria. */
+  /** Taxa fixa da entrega propria (vale quando nao ha faixas por distancia). */
   @Prop({ min: 0, default: 0 })
   deliveryFee: number;
+
+  /**
+   * Faixas por distancia da entrega propria. Com faixas, a taxa vem da
+   * distancia ate o cliente e fora da maior faixa nao ha entrega.
+   */
+  @Prop({ type: [SchemaFactory.createForClass(MenuDeliveryTier)], default: [] })
+  ownTiers: MenuDeliveryTier[];
+
+  @Prop({ type: SchemaFactory.createForClass(MenuDeliveryOrigin) })
+  origin?: MenuDeliveryOrigin;
+
+  /**
+   * Entrega propria paga antes, online (InfinitePay). Desligado = o cliente
+   * paga na entrega. Na Uber o pagamento e sempre online, sem depender disto.
+   */
+  @Prop({ default: false })
+  ownOnlinePayment: boolean;
+
+  /**
+   * Entrega propria: a taxa NAO e calculada no checkout. O pedido entra sem taxa,
+   * o operador cota (ex.: na 99), informa o valor e o link de pagamento sai depois.
+   * So vale com `ownOnlinePayment`.
+   */
+  @Prop({ default: false })
+  quoteAfterOrder: boolean;
 
   @Prop({ default: true })
   deliveryEnabled: boolean;

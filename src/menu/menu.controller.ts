@@ -14,6 +14,8 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { MenuService } from './menu.service';
+import { OwnDeliveryService } from '../delivery/own-delivery.service';
+import { DeliveryOriginDto } from '../delivery/dto/delivery.dto';
 import { BusinessService } from '../business/business.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
@@ -34,6 +36,7 @@ export class MenuController {
   constructor(
     private readonly menuService: MenuService,
     private readonly businessService: BusinessService,
+    private readonly ownDelivery: OwnDeliveryService,
   ) {}
 
   private async assertCanEdit(user: any): Promise<void> {
@@ -60,6 +63,16 @@ export class MenuController {
   ) {
     await this.assertCanEdit(user);
     return this.menuService.updateSettings(user.businessId, dto);
+  }
+
+  /** Define de onde saem as entregas (endereço da loja ou outro informado). */
+  @Post('delivery-origin')
+  async setDeliveryOrigin(
+    @CurrentUser() user: any,
+    @Body() dto: DeliveryOriginDto,
+  ) {
+    await this.assertCanEdit(user);
+    return this.ownDelivery.setOrigin(user.businessId, dto.address);
   }
 
   @Get('preview')

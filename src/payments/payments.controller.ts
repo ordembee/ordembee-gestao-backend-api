@@ -16,6 +16,7 @@ import { InfinitePayService } from './infinitepay.service';
 import {
   InfinitePayWebhookPayload,
   InternalPaymentDto,
+  OrderDeliveryFeeDto,
   UpdateInfinitePaySettingsDto,
 } from './dto/infinitepay.dto';
 
@@ -48,6 +49,21 @@ export class OrderInfinitePayController {
   @HttpCode(200)
   check(@CurrentUser() user: any, @Param('id') id: string) {
     return this.infinitePay.verifyById(id, user.businessId);
+  }
+
+  /** Entrega propria com taxa cotada depois: grava a taxa e gera o link para o cliente. */
+  @Post('delivery-fee')
+  @HttpCode(200)
+  deliveryFee(
+    @CurrentUser() user: any,
+    @Param('id') id: string,
+    @Body() dto: OrderDeliveryFeeDto,
+  ) {
+    return this.infinitePay.setDeliveryFeeAndLink(
+      id,
+      user.businessId,
+      dto.fee,
+    );
   }
 
   /** Gera o link de novo (a criacao do pedido pode ter falhado na InfinitePay). */

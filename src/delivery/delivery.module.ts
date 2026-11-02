@@ -13,6 +13,12 @@ import {
   DeliveryQuote,
   DeliveryQuoteSchema,
 } from './schemas/delivery-quote.schema';
+import {
+  GeocodeCache,
+  GeocodeCacheSchema,
+} from './schemas/geocode-cache.schema';
+import { GeocodingService } from './geocoding.service';
+import { OwnDeliveryService } from './own-delivery.service';
 import { UberDirectClient } from './uber-direct.client';
 import { UberDirectService } from './uber-direct.service';
 import { DeliverySettingsService } from './delivery-settings.service';
@@ -32,6 +38,7 @@ import {
       { name: Order.name, schema: OrderSchema },
       { name: User.name, schema: UserSchema },
       { name: DeliveryQuote.name, schema: DeliveryQuoteSchema },
+      { name: GeocodeCache.name, schema: GeocodeCacheSchema },
     ]),
     OrdersModule,
   ],
@@ -45,8 +52,10 @@ import {
     UberDirectClient,
     UberDirectService,
     DeliverySettingsService,
+    GeocodingService,
+    OwnDeliveryService,
     InternalSignatureGuard,
   ],
-  exports: [UberDirectService],
+  exports: [UberDirectService, OwnDeliveryService],
 })
 export class DeliveryModule {}

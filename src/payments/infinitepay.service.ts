@@ -39,6 +39,7 @@ import {
   sumCents,
   toCents,
   INFINITEPAY_MIN_CENTS,
+  parseCustomerAddress,
   toLinkAddress,
 } from './infinitepay.util';
 import {
@@ -183,6 +184,67 @@ export class InfinitePayService {
     return result;
   }
 
+  /**
+   * Entrega propria com taxa cotada depois: grava a taxa que o operador cotou,
+   * recalcula o total (o desconto da campanha incide so nos itens) e gera o link.
+   */
+  async setDeliveryFeeAndLink(
+    orderId: string,
+    businessId: string,
+    fee: number,
+  ): Promise<{ checkoutUrl: string; order: OrderDocument }> {
+    const order = Types.ObjectId.isValid(orderId)
+      ? await this.orderModel
+          .findOne({
+            _id: orderId,
+            businessId: new Types.ObjectId(businessId),
+          })
+          .exec()
+      : null;
+    if (!order) throw new NotFoundException('Pedido não encontrado');
+    if (!order.deliveryFeePending) {
+      throw new BadRequestException(
+        'A taxa de entrega deste pedido já foi informada',
+      );
+    }
+    if (order.status === OrderStatus.CANCELADA) {
+      throw new BadRequestException('Este pedido foi cancelado');
+    }
+    if (!(await this.isActive(businessId))) {
+      throw new BadRequestException(
+        'A InfinitePay não está habilitada para esta loja',
+      );
+    }
+    const round = (n: number) => Math.round(n * 100) / 100;
+    order.deliveryFee = round(fee);
+    order.total = round(
+      order.itemsTotal + order.deliveryFee - (order.discount?.amount ?? 0),
+    );
+    order.deliveryFeePending = undefined;
+    order.deliveryFeeQuoted = true;
+    await order.save();
+    this.logger.log(
+      `Taxa de entrega informada: #${order.code} | R$ ${order.deliveryFee.toFixed(2)} | negócio: ${businessId}`,
+    );
+    const result = await this.checkoutFor(
+      order,
+      undefined,
+      order.externalRef,
+    ).catch(async (error: Error) => {
+      // A taxa fica gravada; o operador gera o link de novo ("Gerar link").
+      this.logger.error(
+        `Pedido #${order.code} sem link após a taxa: ${error.message}`,
+      );
+      return null;
+    });
+    if (!result) {
+      throw new ServiceUnavailableException(
+        'A taxa foi salva, mas o link de pagamento não saiu. Gere o link de novo.',
+      );
+    }
+    return { checkoutUrl: result.checkoutUrl, order };
+  }
+
   /** A loja cobra pela InfinitePay agora (integração ligada e InfiniteTag preenchida)? */
   async isActive(businessId: string): Promise<boolean> {
     return !!(await this.activeConfig(new Types.ObjectId(businessId)));
@@ -195,6 +257,11 @@ export class InfinitePayService {
   ): Promise<{ checkoutUrl: string } | null> {
     const bizId = order.businessId;
     const businessId = bizId.toString();
+    if (order.deliveryFeePending) {
+      throw new BadRequestException(
+        'Informe a taxa de entrega antes de gerar o link de pagamento',
+      );
+    }
     const orderNsu = order.infinitePay?.orderNsu ?? orderRef;
     if (order.infinitePay?.checkoutUrl) {
       return { checkoutUrl: order.infinitePay.checkoutUrl };
@@ -261,7 +328,11 @@ export class InfinitePayService {
           email: order.customerEmail,
           phone_number: this.e164(order.customerPhone),
         },
-        address: toLinkAddress(order.delivery?.dropoff),
+        // Uber: endereco estruturado da corrida; entrega propria: o do pedido.
+        address: toLinkAddress(
+          order.delivery?.dropoff ??
+            parseCustomerAddress(order.customerAddress),
+        ),
       });
     } catch (error) {
       throw this.toHttpError(error, 'gerar o link de pagamento');

@@ -797,6 +797,8 @@ export class OrdersService {
     customerAddress?: string;
     customerEmail?: string;
     requestedPayment: OrderRequestedPayment;
+    /** Taxa de entrega ainda por cotar (entrega propria, cotacao manual). */
+    deliveryFeePending?: boolean;
     /** Entrega Uber (cotacao que o cliente pagou + destino estruturado). */
     delivery?: OrderDelivery;
     notes?: string;
@@ -856,6 +858,7 @@ export class OrdersService {
         notes: input.notes,
         payments: [],
         requestedPayment: input.requestedPayment,
+        deliveryFeePending: input.deliveryFeePending || undefined,
         delivery: input.delivery,
         statusHistory: [
           {

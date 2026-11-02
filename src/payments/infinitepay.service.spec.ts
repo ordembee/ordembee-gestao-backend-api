@@ -327,3 +327,61 @@ describe('InfinitePayService — pedido do painel com sinal', () => {
     expect(client.createLink).not.toHaveBeenCalled();
   });
 });
+
+describe('InfinitePayService.setDeliveryFeeAndLink — taxa cotada depois', () => {
+  const pending = () => ({
+    _id: new Types.ObjectId(),
+    code: 12,
+    businessId,
+    externalRef: 'ref-9',
+    status: 'PENDENTE',
+    customerName: 'Maria',
+    customerAddress: 'Rua A, 10\nCentro · CEP 21630-240',
+    itemsTotal: 40,
+    deliveryFee: 0,
+    total: 40,
+    discount: { amount: 4, percent: 10 },
+    deliveryFeePending: true,
+    requestedPayment: { prepaid: true },
+    items: [{ productName: 'Bolo', quantity: 1, unitPrice: 40, subtotal: 40 }],
+    save: jest.fn(async function (this: unknown) {
+      return this;
+    }),
+  });
+
+  it('grava a taxa, refaz o total (desconto só nos itens) e gera o link', async () => {
+    const order: any = pending();
+    const { service, client } = setup({ order });
+    client.createLink.mockResolvedValue({ url: 'https://checkout.infinitepay.io/l/x' });
+
+    const r = await service.setDeliveryFeeAndLink(
+      order._id.toString(),
+      businessId.toString(),
+      7.3,
+    );
+
+    expect(order.deliveryFee).toBe(7.3);
+    expect(order.total).toBe(43.3);
+    expect(order.deliveryFeePending).toBeUndefined();
+    expect(r.checkoutUrl).toBe('https://checkout.infinitepay.io/l/x');
+    const body = client.createLink.mock.calls[0][0];
+    expect(body.address).toMatchObject({ cep: '21630240' });
+  });
+
+  it('só informa a taxa uma vez', async () => {
+    const order: any = { ...pending(), deliveryFeePending: undefined };
+    const { service } = setup({ order });
+    await expect(
+      service.setDeliveryFeeAndLink(order._id.toString(), businessId.toString(), 5),
+    ).rejects.toThrow(/já foi informada/);
+  });
+
+  it('enquanto a taxa está pendente, nenhum link é gerado', async () => {
+    const order: any = pending();
+    const { service, client } = setup({ order });
+    await expect(
+      service.ensureCheckout(businessId.toString(), 'ref-9'),
+    ).rejects.toThrow(/taxa de entrega/);
+    expect(client.createLink).not.toHaveBeenCalled();
+  });
+});

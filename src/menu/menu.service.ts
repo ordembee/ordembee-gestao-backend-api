@@ -1,3 +1,4 @@
+import { formatBusinessAddress } from '../business/business-address.util';
 import {
   BadRequestException,
   ConflictException,
@@ -13,6 +14,7 @@ import {
 } from '../business/schemas/business.schema';
 import {
   DeliveryProvider,
+  MenuDeliveryOrigin,
   MenuItem,
   MenuOnline,
   MenuOnlineDocument,
@@ -23,6 +25,12 @@ import {
   Category,
   CategoryDocument,
 } from '../categories/schemas/category.schema';
+import {
+  DeliveryTier,
+  sortTiers,
+  tiersError,
+} from '../delivery/own-delivery.util';
+import { infinitePayActive } from '../payments/infinitepay.service';
 import { StorageService } from '../storage/storage.service';
 import { resolveTimeZone } from '../common/date/timezone.util';
 import { UpdateMenuSettingsDto } from './dto/update-menu-settings.dto';
@@ -82,6 +90,10 @@ export type ResolvedMenu = Omit<
     delivery: {
       deliveryProvider: DeliveryProvider;
       deliveryFee: number;
+      ownTiers: DeliveryTier[];
+      origin: MenuDeliveryOrigin | null;
+      ownOnlinePayment: boolean;
+      quoteAfterOrder: boolean;
       deliveryEnabled: boolean;
       pickupEnabled: boolean;
     };
@@ -123,6 +135,12 @@ export function resolveMenu(doc: Partial<MenuOnline> | null): ResolvedMenu {
             ? DeliveryProvider.UBER
             : DeliveryProvider.PROPRIA,
         deliveryFee: delivery?.deliveryFee ?? 0,
+        ownTiers: sortTiers(delivery?.ownTiers),
+        origin: delivery?.origin ?? null,
+        ownOnlinePayment: delivery?.ownOnlinePayment === true,
+        quoteAfterOrder:
+          delivery?.ownOnlinePayment === true &&
+          delivery?.quoteAfterOrder === true,
         deliveryEnabled: delivery?.deliveryEnabled !== false,
         pickupEnabled: delivery?.pickupEnabled !== false,
       },
@@ -200,13 +218,17 @@ export class MenuService {
     const [business, doc] = await Promise.all([
       this.businessModel
         .findById(id)
-        .select('name logoUrl timezone')
+        .select('name logoUrl timezone address config.infinitepay')
         .lean()
         .exec(),
       this.menuModel.findOne({ businessId: id }).lean<MenuOnline>().exec(),
     ]);
     if (!business) throw new NotFoundException('Negócio não encontrado');
-    return { business, menu: resolveMenu(doc) };
+    const menu = resolveMenu(doc);
+    // O endereço da loja é o do negócio (Minha Loja): atualizou lá, atualiza aqui.
+    const address = formatBusinessAddress(business.address);
+    if (address) menu.store.contact.address = address;
+    return { business, menu };
   }
 
   /** Grava no cardapio do negocio (cria o documento na primeira vez). */
@@ -285,6 +307,20 @@ export class MenuService {
         whatsapp: store.contact.whatsapp,
         timezone: resolveTimeZone(business.timezone),
         deliveryFee: store.delivery.deliveryFee,
+        // Ausente quando nao ha faixas: o hash dos cardapios antigos nao muda.
+        ...(store.delivery.deliveryProvider === DeliveryProvider.PROPRIA &&
+        store.delivery.ownOnlinePayment
+          ? { ownOnlinePayment: true }
+          : {}),
+        ...(store.delivery.deliveryProvider === DeliveryProvider.PROPRIA &&
+        store.delivery.quoteAfterOrder
+          ? { quoteAfterOrder: true }
+          : {}),
+        ...(store.delivery.deliveryProvider === DeliveryProvider.PROPRIA &&
+        !store.delivery.quoteAfterOrder &&
+        store.delivery.ownTiers.length
+          ? { ownTiers: store.delivery.ownTiers }
+          : {}),
         deliveryEnabled: store.delivery.deliveryEnabled,
         deliveryProvider: store.delivery.deliveryProvider,
         pickupEnabled: store.delivery.pickupEnabled,
@@ -358,6 +394,36 @@ export class MenuService {
       );
     }
 
+    if (
+      dto.store?.delivery?.ownOnlinePayment === true &&
+      !infinitePayActive(business.config?.infinitepay)
+    ) {
+      throw new BadRequestException(
+        'Ative o pagamento online (InfinitePay) antes de cobrar a entrega própria online',
+      );
+    }
+    if (
+      dto.store?.delivery?.quoteAfterOrder === true &&
+      !(
+        dto.store.delivery.ownOnlinePayment ??
+        menu.store.delivery.ownOnlinePayment
+      )
+    ) {
+      throw new BadRequestException(
+        'Cotar a taxa depois do pedido exige o pagamento da entrega online',
+      );
+    }
+    const tiers = dto.store?.delivery?.ownTiers;
+    if (tiers?.length) {
+      const problem = tiersError(tiers);
+      if (problem) throw new BadRequestException(problem);
+      if (!menu.store.delivery.origin && !business.address?.street) {
+        throw new BadRequestException(
+          'Cadastre o endereço da loja em Minha Loja antes de cadastrar as faixas de entrega',
+        );
+      }
+    }
+
     // Link no ar = ha um arquivo publicado. Trocar o slug entao derruba o
     // link antigo (e libera o endereco para outro negocio) — por isso o
     // intervalo minimo entre trocas.
@@ -384,6 +450,9 @@ export class MenuService {
     }
 
     const set = toSetPaths(dto as Record<string, unknown>);
+    // O endereço vem do negócio: nunca é gravado no cardápio.
+    delete set['store.contact.address'];
+    if (tiers) set['store.delivery.ownTiers'] = sortTiers(tiers);
     if (slugChanged && linkIsLive) set.slugChangedAt = new Date();
 
     // Desligar o cardapio tira o arquivo do ar na hora — o link para de funcionar.

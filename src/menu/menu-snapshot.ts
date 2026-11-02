@@ -49,6 +49,15 @@ export interface MenuSnapshotStore {
   whatsapp: string;
   timezone: string;
   deliveryFee: number;
+  /**
+   * Entrega propria por distancia: ate `maxKm` (km estimados por rua) a taxa e
+   * `fee`; o frete e calculado no checkout. Ausente = taxa fixa `deliveryFee`.
+   */
+  ownTiers?: { maxKm: number; fee: number }[];
+  /** Entrega propria paga antes, online (InfinitePay). Ausente = paga na entrega. */
+  ownOnlinePayment?: boolean;
+  /** Taxa de entrega cotada depois do pedido: o checkout nao calcula frete nem cobra. */
+  quoteAfterOrder?: boolean;
   /** false = a loja nao entrega (so retirada). */
   deliveryEnabled: boolean;
   /**

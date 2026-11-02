@@ -35,6 +35,7 @@ import {
 } from './dto/menu-order.dto';
 import { isOpenAt } from './menu-hours.util';
 import { buildPixBrCode } from '../common/pix/pix-brcode';
+import { usesDistanceTiers } from '../delivery/own-delivery.util';
 import { UberDirectService } from '../delivery/uber-direct.service';
 import {
   InfinitePayService,
@@ -146,6 +147,8 @@ export interface MenuOrderResult {
   pix?: { payload: string; amount: number };
   checkoutUrl?: string;
   onlinePayment?: 'INFINITEPAY';
+  /** Entrega propria com taxa cotada depois: sem link ainda, a loja avisa o cliente. */
+  feePending?: true;
 }
 
 /** Pix copia-e-cola do pedido (txid = numero do pedido, para achar no extrato). */
@@ -420,6 +423,65 @@ export class MenuOrdersService {
     };
   }
 
+  /**
+   * Entrega propria por faixa de distancia: a taxa e a da cotacao feita no
+   * checkout para este mesmo endereco (nunca um valor do navegador).
+   */
+  private async prepareOwnDelivery(
+    businessId: Types.ObjectId,
+    dto: MenuOrderDto,
+  ): Promise<{ fee: number; distanceKm?: number }> {
+    const a = dto.address!;
+    if (!a.cep || !a.city || !a.state) {
+      throw new BadRequestException('Informe CEP, cidade e estado da entrega');
+    }
+    if (!dto.quoteId) {
+      throw reject(
+        'QUOTE_REQUIRED',
+        'Calcule a taxa de entrega antes de enviar o pedido',
+      );
+    }
+    const quote = await this.uberDirect.acceptMenuQuote(
+      businessId,
+      dto.quoteId,
+      {
+        cep: a.cep,
+        street: a.street.trim(),
+        number: a.number.trim(),
+        district: a.district.trim(),
+        city: a.city.trim(),
+        state: a.state.toUpperCase(),
+      },
+    );
+    return { fee: quote.fee, distanceKm: quote.distanceKm };
+  }
+
+  /** Entrega propria paga online: precisa da InfinitePay ativa e do pagamento "Pix" do checkout. */
+  private assertOwnOnlinePayment(
+    businessId: Types.ObjectId,
+    dto: MenuOrderDto,
+    online: boolean,
+  ) {
+    if (!online) {
+      this.logger.error(
+        `Entrega própria online sem InfinitePay ativa: ${businessId.toString()}`,
+      );
+      throw reject(
+        'MENU_DISABLED',
+        'A loja não está recebendo pedidos com entrega agora',
+      );
+    }
+    if (dto.payment.method !== PaymentMethod.PIX) {
+      throw new BadRequestException(
+        'Entrega com pagamento online é paga antes, no checkout',
+      );
+    }
+    // O CEP vai no link de pagamento e na cotacao do entregador.
+    if (!dto.address?.cep?.replace(/\D/g, '')) {
+      throw new BadRequestException('Informe o CEP de entrega');
+    }
+  }
+
   async claimPayment(slug: string, ref: string) {
     const menu = await this.menuModel
       .findOne({ slug })
@@ -453,9 +515,17 @@ export class MenuOrdersService {
     const uberMode =
       dto.fulfillment === OrderFulfillment.ENTREGA &&
       delivery.deliveryProvider === DeliveryProvider.UBER;
+    // Entrega propria paga antes, online: o pagamento e o do checkout da InfinitePay.
+    const ownOnlineMode =
+      dto.fulfillment === OrderFulfillment.ENTREGA &&
+      delivery.deliveryProvider === DeliveryProvider.PROPRIA &&
+      delivery.ownOnlinePayment;
+    // Taxa cotada pelo operador depois do pedido: sem frete nem link agora.
+    const quoteLater = ownOnlineMode && delivery.quoteAfterOrder;
     if (
       // Na Uber o pagamento e sempre Pix antecipado (conferido adiante).
       !uberMode &&
+      !ownOnlineMode &&
       menu.store.acceptedPayments.length &&
       !menu.store.acceptedPayments.includes(dto.payment.method)
     ) {
@@ -579,14 +649,26 @@ export class MenuOrdersService {
 
     this.assertStockFits(dto.items, byId, stocks);
 
+    if (ownOnlineMode) this.assertOwnOnlinePayment(businessId, dto, online);
     const uber = uberMode
       ? await this.prepareUberDelivery(businessId, dto, pix, online)
       : null;
+    const own =
+      !uber &&
+      !quoteLater &&
+      dto.fulfillment === OrderFulfillment.ENTREGA &&
+      usesDistanceTiers(delivery)
+        ? await this.prepareOwnDelivery(businessId, dto)
+        : null;
     const deliveryFee = uber
       ? uber.fee
-      : dto.fulfillment === OrderFulfillment.ENTREGA
-        ? delivery.deliveryFee
-        : 0;
+      : own
+        ? own.fee
+        : quoteLater
+          ? 0
+          : dto.fulfillment === OrderFulfillment.ENTREGA
+            ? delivery.deliveryFee
+            : 0;
     const estimatedTotal =
       items.reduce((sum, i) => sum + i.unitPrice * i.quantity, 0) + deliveryFee;
     const { payment } = dto;
@@ -622,6 +704,7 @@ export class MenuOrdersService {
       deliveryFee,
       customerAddress: address,
       customerEmail: dto.customer.email?.trim() || undefined,
+      deliveryFeePending: quoteLater || undefined,
       requestedPayment: {
         method: payment.method,
         brand: payment.brand,
@@ -629,18 +712,34 @@ export class MenuOrdersService {
           payment.method === PaymentMethod.DINHEIRO
             ? payment.changeFor
             : undefined,
-        prepaid: uber ? true : undefined,
+        prepaid: uber || ownOnlineMode ? true : undefined,
       },
       delivery: uber?.delivery,
       notes: uber
         ? online
           ? 'Pedido feito pelo cardápio digital · entrega Uber · pagamento pela InfinitePay'
           : 'Pedido feito pelo cardápio digital · entrega Uber (Pix antecipado)'
-        : 'Pedido feito pelo cardápio digital',
+        : [
+            'Pedido feito pelo cardápio digital',
+            own?.distanceKm !== undefined &&
+              `entrega a ~${own.distanceKm.toLocaleString('pt-BR')} km`,
+            ownOnlineMode && 'pagamento pela InfinitePay',
+            quoteLater && 'taxa de entrega a cotar'
+          ]
+            .filter(Boolean)
+            .join(' · '),
     });
 
-    if (!uber)
+    if (!uber && !ownOnlineMode)
       return { code: order.code, total: order.total, ref: dto.orderRef };
+    if (quoteLater) {
+      return {
+        code: order.code,
+        total: order.total,
+        ref: dto.orderRef,
+        feePending: true,
+      };
+    }
     if (online) {
       // Falha ao gerar o link nao derruba o pedido (ja existe, com estoque
       // reservado): o cardapio pede o link de novo.

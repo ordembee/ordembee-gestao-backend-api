@@ -110,3 +110,28 @@ export function toLinkAddress(a?: {
     complement: a.complement || undefined,
   };
 }
+
+/**
+ * Endereco de entrega gravado no pedido do cardapio ("Rua, 58 – apto\nBairro ·
+ * CEP 21630-240\nRef.: ...", ver formatAddress) de volta em campos. Serve a
+ * entrega propria, que nao tem o `delivery.dropoff` estruturado da Uber.
+ * Sem CEP valido devolve undefined (o link sai sem endereco).
+ */
+export function parseCustomerAddress(text?: string) {
+  if (!text) return undefined;
+  const [line1 = '', line2 = ''] = text.split('\n').map((l) => l.trim());
+  const [streetNumber = '', ...comp] = line1.split(' – ');
+  const at = streetNumber.lastIndexOf(',');
+  const street = (at >= 0 ? streetNumber.slice(0, at) : streetNumber).trim();
+  const number = (at >= 0 ? streetNumber.slice(at + 1) : '').trim();
+  const [district = '', cepPart = ''] = line2.split(' · ');
+  const cep = cepPart.replace(/\D/g, '');
+  if (cep.length !== 8 || !street) return undefined;
+  return {
+    cep,
+    street,
+    number,
+    district: district.trim(),
+    complement: comp.join(' – ').trim() || undefined,
+  };
+}

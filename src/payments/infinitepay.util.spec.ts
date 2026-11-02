@@ -3,6 +3,7 @@ import {
   buildLinkItems,
   methodOfCapture,
   normalizeHandle,
+  parseCustomerAddress,
   parseLinkUrl,
   sumCents,
   toLinkAddress,
@@ -75,6 +76,22 @@ describe('infinitepay.util', () => {
       complement: undefined,
     });
     expect(toLinkAddress(undefined)).toBeUndefined();
+  });
+
+  it('parseCustomerAddress desfaz o endereço do cardápio', () => {
+    expect(
+      parseCustomerAddress(
+        'Rua Leopoldina Borges, 58 – apto 2\nAnchieta · CEP 21630-240\nRef.: portão azul',
+      ),
+    ).toEqual({
+      cep: '21630240',
+      street: 'Rua Leopoldina Borges',
+      number: '58',
+      district: 'Anchieta',
+      complement: 'apto 2',
+    });
+    expect(parseCustomerAddress('Rua A, 1\nCentro')).toBeUndefined();
+    expect(parseCustomerAddress(undefined)).toBeUndefined();
   });
 
   it('methodOfCapture', () => {
