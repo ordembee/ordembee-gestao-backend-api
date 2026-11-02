@@ -46,6 +46,8 @@ export interface CheckoutOptions {
   uber: boolean;
   /** A loja cobra pelo link da InfinitePay. */
   infinitePay: boolean;
+  /** Entrega propria com a taxa cotada depois (cotacao manual na 99). */
+  quoteAfterOrder: boolean;
 }
 
 /**
@@ -90,6 +92,11 @@ export class PanelCheckoutService {
         viaUber &&
         uberMissing(business?.config?.uber, true).length === 0,
       infinitePay: await this.infinitePay.isActive(businessId),
+      quoteAfterOrder:
+        deliveryOn &&
+        !viaUber &&
+        delivery?.ownOnlinePayment === true &&
+        delivery?.quoteAfterOrder === true,
     };
   }
 
