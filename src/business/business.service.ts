@@ -11,6 +11,10 @@ import {
 import { Role } from '../common/enums/role.enum';
 import { UpdatePermissionsDto } from './dto/update-permissions.dto';
 import { UpdateBusinessDto } from './dto/update-business.dto';
+import {
+  MenuOnline,
+  MenuOnlineDocument,
+} from '../menu/schemas/menu-online.schema';
 import { onlyDigits } from '../common/document/cpf-cnpj';
 import {
   DEFAULT_TIMEZONE,
@@ -27,6 +31,8 @@ export class BusinessService {
   constructor(
     @InjectModel(Business.name)
     private readonly businessModel: Model<BusinessDocument>,
+    @InjectModel(MenuOnline.name)
+    private readonly menuModel: Model<MenuOnlineDocument>,
   ) {}
 
   /** Fuso IANA do negocio, com cache curto — base de todo calculo de dia/periodo. */
@@ -122,6 +128,21 @@ export class BusinessService {
       .exec();
 
     if (!business) throw new NotFoundException('Negócio não encontrado');
+
+    // O telefone da loja é também o WhatsApp do cardápio: atualizou aqui, acompanha lá
+    // (nome e endereço já saem direto do negócio). Só cardápios que já existem.
+    if (update.phone) {
+      await this.menuModel
+        .updateOne(
+          { businessId: new Types.ObjectId(businessId) },
+          {
+            $set: {
+              'store.contact.whatsapp': onlyDigits(String(update.phone)),
+            },
+          },
+        )
+        .exec();
+    }
 
     this.tzCache.delete(businessId);
     this.logger.log(
