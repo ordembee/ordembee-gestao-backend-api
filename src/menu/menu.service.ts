@@ -101,6 +101,7 @@ export type ResolvedMenu = Omit<
     socialMedia: { instagram: string };
     images: { coverUrl: string | null; logoUrl: string | null };
     colors: { themeColor: string };
+    analytics: { googleAnalyticsId: string };
     openingHours: MenuOnline['store']['openingHours'];
   };
   labelText: {
@@ -154,6 +155,9 @@ export function resolveMenu(doc: Partial<MenuOnline> | null): ResolvedMenu {
         logoUrl: store?.images?.logoUrl || null,
       },
       colors: { themeColor: store?.colors?.themeColor ?? '' },
+      analytics: {
+        googleAnalyticsId: store?.analytics?.googleAnalyticsId ?? '',
+      },
       openingHours: store?.openingHours ?? {},
     },
     labelText: {
@@ -331,6 +335,10 @@ export class MenuService {
         themeColor: /^#[0-9a-fA-F]{6}$/.test(store.colors.themeColor)
           ? store.colors.themeColor.toLowerCase()
           : null,
+        // Ausente sem ID: o hash dos cardapios sem rastreio nao muda.
+        ...(/^G-[A-Za-z0-9]{4,20}$/.test(store.analytics.googleAnalyticsId)
+          ? { googleAnalyticsId: store.analytics.googleAnalyticsId }
+          : {}),
         acceptedPayments: store.acceptedPayments.length
           ? store.acceptedPayments
           : [...MENU_PAYMENT_METHODS],

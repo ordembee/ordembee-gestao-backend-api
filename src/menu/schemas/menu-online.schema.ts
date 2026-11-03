@@ -191,6 +191,13 @@ export class MenuColors {
   themeColor?: string;
 }
 
+@Schema({ _id: false })
+export class MenuAnalytics {
+  /** ID de medicao do Google Analytics 4 (G-XXXXXXXXXX). Ausente = sem rastreio. */
+  @Prop()
+  googleAnalyticsId?: string;
+}
+
 /** Como a loja funciona no cardapio: pagamento, entrega, contato e visual. */
 @Schema({ _id: false })
 export class MenuStore {
@@ -221,6 +228,12 @@ export class MenuStore {
 
   @Prop({ type: SchemaFactory.createForClass(MenuColors), default: () => ({}) })
   colors: MenuColors;
+
+  @Prop({
+    type: SchemaFactory.createForClass(MenuAnalytics),
+    default: () => ({}),
+  })
+  analytics: MenuAnalytics;
 
   @Prop({ type: Object, default: () => ({}) })
   openingHours: MenuOpeningHours;

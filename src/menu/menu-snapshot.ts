@@ -73,6 +73,8 @@ export interface MenuSnapshotStore {
   highlightTitle: string;
   /** Cor da marca (#RRGGBB) para o cardapio aplicar; null = cor padrao. */
   themeColor: string | null;
+  /** ID do Google Analytics 4 (G-…) da loja; ausente = cardapio sem rastreio. */
+  googleAnalyticsId?: string;
   /** PaymentMethod aceitos no cardapio (CARTAO_CREDITO, CARTAO_DEBITO, PIX, DINHEIRO). */
   acceptedPayments: string[];
 }

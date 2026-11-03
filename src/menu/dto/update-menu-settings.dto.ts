@@ -109,6 +109,15 @@ export class UpdateMenuColorsDto {
   themeColor?: string;
 }
 
+export class UpdateMenuAnalyticsDto {
+  /** ID de medição do Google Analytics 4. Vazio = sem rastreio. */
+  @IsOptional()
+  @Matches(/^(G-[A-Za-z0-9]{4,20})?$/, {
+    message: 'ID do Google Analytics inválido (use G-XXXXXXXXXX)',
+  })
+  googleAnalyticsId?: string;
+}
+
 /** Imagens se trocam por upload (POST /menu/images/:kind); aqui so a URL colada da capa. */
 export class UpdateMenuImagesDto {
   @IsOptional()
@@ -149,6 +158,11 @@ export class UpdateMenuStoreDto {
   @ValidateNested()
   @Type(() => UpdateMenuColorsDto)
   colors?: UpdateMenuColorsDto;
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => UpdateMenuAnalyticsDto)
+  analytics?: UpdateMenuAnalyticsDto;
 
   @IsOptional()
   @IsObject()
