@@ -29,9 +29,13 @@ import { SaveOptionGroupDto } from './dto/option-group.dto';
 import { ParseObjectIdPipe } from './parse-object-id.pipe';
 import { ParseStoreImageKindPipe } from './parse-store-image-kind.pipe';
 
-/** Gestao do cardapio digital — mesma permissao de editar produtos. */
+/**
+ * Gestao do cardapio digital — mesma permissao de editar produtos. O CAIXA so entra pelas
+ * permissoes proprias: publicar o cardapio e ativar/desativar itens (leituras liberadas
+ * a quem tiver uma das duas, para a aba funcionar).
+ */
 @Controller('menu')
-@Roles(Role.OWNER, Role.GERENTE)
+@Roles(Role.OWNER, Role.GERENTE, Role.CAIXA)
 export class MenuController {
   constructor(
     private readonly menuService: MenuService,
@@ -39,20 +43,38 @@ export class MenuController {
     private readonly ownDelivery: OwnDeliveryService,
   ) {}
 
-  private async assertCanEdit(user: any): Promise<void> {
+  private async assertAllowed(
+    user: any,
+    action: 'read' | 'edit' | 'publish' | 'toggle',
+  ): Promise<void> {
+    if (user.role === Role.OWNER) return;
+    const perms = await this.businessService.getEffectivePermissions(
+      user.businessId,
+      user.role,
+    );
     if (user.role === Role.GERENTE) {
-      const perms = await this.businessService.getEffectivePermissions(
-        user.businessId,
-        user.role,
-      );
-      if (!perms.canEditProducts) {
+      if (action !== 'read' && !perms.canEditProducts) {
         throw new ForbiddenException('Sem permissão para gerenciar o cardápio');
       }
+      return;
+    }
+    // CAIXA: nunca edita a configuracao; so o que a permissao dele libera.
+    const allowed =
+      action === 'publish'
+        ? perms.canPublishMenu
+        : action === 'toggle'
+          ? perms.canToggleMenuItems
+          : action === 'read'
+            ? perms.canPublishMenu || perms.canToggleMenuItems
+            : false;
+    if (!allowed) {
+      throw new ForbiddenException('Sem permissão para gerenciar o cardápio');
     }
   }
 
   @Get('settings')
-  getSettings(@CurrentUser() user: any) {
+  async getSettings(@CurrentUser() user: any) {
+    await this.assertAllowed(user, 'read');
     return this.menuService.getSettings(user.businessId);
   }
 
@@ -61,7 +83,7 @@ export class MenuController {
     @CurrentUser() user: any,
     @Body() dto: UpdateMenuSettingsDto,
   ) {
-    await this.assertCanEdit(user);
+    await this.assertAllowed(user, 'edit');
     return this.menuService.updateSettings(user.businessId, dto);
   }
 
@@ -71,23 +93,25 @@ export class MenuController {
     @CurrentUser() user: any,
     @Body() dto: DeliveryOriginDto,
   ) {
-    await this.assertCanEdit(user);
+    await this.assertAllowed(user, 'edit');
     return this.ownDelivery.setOrigin(user.businessId, dto.address);
   }
 
   @Get('preview')
-  preview(@CurrentUser() user: any) {
+  async preview(@CurrentUser() user: any) {
+    await this.assertAllowed(user, 'read');
     return this.menuService.preview(user.businessId);
   }
 
   @Post('publish')
   async publish(@CurrentUser() user: any) {
-    await this.assertCanEdit(user);
+    await this.assertAllowed(user, 'publish');
     return this.menuService.publish(user.businessId);
   }
 
   @Get('categories')
-  listCategories(@CurrentUser() user: any) {
+  async listCategories(@CurrentUser() user: any) {
+    await this.assertAllowed(user, 'read');
     return this.menuService.listCategories(user.businessId);
   }
 
@@ -96,12 +120,13 @@ export class MenuController {
     @CurrentUser() user: any,
     @Body() dto: ReorderMenuCategoriesDto,
   ) {
-    await this.assertCanEdit(user);
+    await this.assertAllowed(user, 'edit');
     return this.menuService.reorderCategories(user.businessId, dto);
   }
 
   @Get('items')
-  listItems(@CurrentUser() user: any) {
+  async listItems(@CurrentUser() user: any) {
+    await this.assertAllowed(user, 'read');
     return this.menuService.listItems(user.businessId);
   }
 
@@ -111,12 +136,17 @@ export class MenuController {
     @Param('productId', ParseObjectIdPipe) productId: string,
     @Body() dto: UpdateMenuItemDto,
   ) {
-    await this.assertCanEdit(user);
+    await this.assertAllowed(user, 'toggle');
+    // CAIXA so liga/desliga o item; complementos sao configuracao.
+    if (user.role === Role.CAIXA && dto.optionGroupIds !== undefined) {
+      throw new ForbiddenException('Sem permissão para editar complementos');
+    }
     return this.menuService.updateItem(user.businessId, productId, dto);
   }
 
   @Get('option-groups')
-  listOptionGroups(@CurrentUser() user: any) {
+  async listOptionGroups(@CurrentUser() user: any) {
+    await this.assertAllowed(user, 'read');
     return this.menuService.listOptionGroups(user.businessId);
   }
 
@@ -125,7 +155,7 @@ export class MenuController {
     @CurrentUser() user: any,
     @Body() dto: SaveOptionGroupDto,
   ) {
-    await this.assertCanEdit(user);
+    await this.assertAllowed(user, 'edit');
     return this.menuService.saveOptionGroup(user.businessId, null, dto);
   }
 
@@ -135,7 +165,7 @@ export class MenuController {
     @Param('groupId', ParseObjectIdPipe) groupId: string,
     @Body() dto: SaveOptionGroupDto,
   ) {
-    await this.assertCanEdit(user);
+    await this.assertAllowed(user, 'edit');
     return this.menuService.saveOptionGroup(user.businessId, groupId, dto);
   }
 
@@ -144,7 +174,7 @@ export class MenuController {
     @CurrentUser() user: any,
     @Param('groupId', ParseObjectIdPipe) groupId: string,
   ) {
-    await this.assertCanEdit(user);
+    await this.assertAllowed(user, 'edit');
     return this.menuService.removeOptionGroup(user.businessId, groupId);
   }
 
@@ -169,7 +199,7 @@ export class MenuController {
     @Param('kind', ParseStoreImageKindPipe) kind: 'logo' | 'cover',
     @UploadedFile() file: Express.Multer.File,
   ) {
-    await this.assertCanEdit(user);
+    await this.assertAllowed(user, 'edit');
     return this.menuService.setStoreImage(user.businessId, kind, file);
   }
 
@@ -178,7 +208,7 @@ export class MenuController {
     @CurrentUser() user: any,
     @Param('kind', ParseStoreImageKindPipe) kind: 'logo' | 'cover',
   ) {
-    await this.assertCanEdit(user);
+    await this.assertAllowed(user, 'edit');
     return this.menuService.removeStoreImage(user.businessId, kind);
   }
 }

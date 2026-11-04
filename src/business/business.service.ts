@@ -170,7 +170,15 @@ export class BusinessService {
 
     if (!business) throw new NotFoundException('Negócio não encontrado');
 
-    return business.permissions ?? DEFAULT_PERMISSIONS;
+    // Permissoes criadas antes de um campo novo nao o tem gravado: completa com o padrao
+    // (senao o "tudo liberado" do perfil efetivo ligaria o campo para quem nunca o recebeu).
+    return {
+      gerente: {
+        ...DEFAULT_PERMISSIONS.gerente,
+        ...business.permissions?.gerente,
+      },
+      caixa: { ...DEFAULT_PERMISSIONS.caixa, ...business.permissions?.caixa },
+    };
   }
 
   async updatePermissions(
@@ -183,7 +191,7 @@ export class BusinessService {
 
     if (!business) throw new NotFoundException('Negócio não encontrado');
 
-    const current = business.permissions ?? DEFAULT_PERMISSIONS;
+    const current = await this.getPermissions(businessId);
 
     const merged: BusinessPermissions = {
       gerente: { ...current.gerente, ...(dto.gerente ?? {}) },

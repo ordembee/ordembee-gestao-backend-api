@@ -25,6 +25,8 @@ class CaixaPermissionsDto {
   @IsBoolean() @IsOptional() canRefund?: boolean;
   @IsBoolean() @IsOptional() canSellWithNegativeStock?: boolean;
   @IsBoolean() @IsOptional() canViewStock?: boolean;
+  @IsBoolean() @IsOptional() canPublishMenu?: boolean;
+  @IsBoolean() @IsOptional() canToggleMenuItems?: boolean;
 }
 
 export class UpdatePermissionsDto {

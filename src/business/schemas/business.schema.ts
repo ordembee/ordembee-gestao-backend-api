@@ -22,6 +22,10 @@ export interface CaixaPermissions {
   canRefund: boolean;
   canSellWithNegativeStock: boolean;
   canViewStock: boolean;
+  /** Publicar o cardapio digital (aba Cardapio digital). */
+  canPublishMenu: boolean;
+  /** Ativar/desativar itens no cardapio digital. */
+  canToggleMenuItems: boolean;
 }
 
 export interface BusinessPermissions {
@@ -50,6 +54,8 @@ export const DEFAULT_PERMISSIONS: BusinessPermissions = {
     canRefund: false,
     canSellWithNegativeStock: false,
     canViewStock: false,
+    canPublishMenu: false,
+    canToggleMenuItems: false,
   },
 };
 
