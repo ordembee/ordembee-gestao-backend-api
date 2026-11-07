@@ -1,4 +1,9 @@
 import {
+  buildPage,
+  PageRequest,
+  Paginated,
+} from '../common/pagination/pagination';
+import {
   BadRequestException,
   Injectable,
   Logger,
@@ -143,7 +148,8 @@ export class CustomersService {
   async findAll(
     businessId: string,
     search?: string,
-  ): Promise<CustomerWithDebt[]> {
+    pageReq?: PageRequest | null,
+  ): Promise<CustomerWithDebt[] | Paginated<CustomerWithDebt>> {
     const filter: Record<string, unknown> = {
       businessId: new Types.ObjectId(businessId),
       isActive: true,
@@ -155,15 +161,26 @@ export class CustomersService {
       ];
     }
 
-    const customers = await this.customerModel
-      .find(filter)
-      .sort({ name: 1 })
-      .exec();
+    const query = this.customerModel.find(filter).sort({ name: 1, _id: 1 });
+    if (!pageReq) {
+      const customers = await query.exec();
+      const debtMap = await this.getOutstandingDebtMap(
+        businessId,
+        customers.map((c) => c._id as Types.ObjectId),
+      );
+      return this.attachDebt(customers, debtMap);
+    }
+
+    const [customers, total] = await Promise.all([
+      query.skip(pageReq.skip).limit(pageReq.limit).exec(),
+      this.customerModel.countDocuments(filter).exec(),
+    ]);
+    // Dívida só dos clientes da página.
     const debtMap = await this.getOutstandingDebtMap(
       businessId,
       customers.map((c) => c._id as Types.ObjectId),
     );
-    return this.attachDebt(customers, debtMap);
+    return buildPage(this.attachDebt(customers, debtMap), total, pageReq);
   }
 
   async findOne(id: string, businessId: string): Promise<CustomerWithDebt> {

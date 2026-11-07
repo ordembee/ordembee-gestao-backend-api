@@ -56,6 +56,25 @@ export class ReportsController {
     );
   }
 
+  @Get('sales-by-hour')
+  getSalesByHour(
+    @CurrentUser() user: any,
+    @Query('dateFrom') dateFrom?: string,
+    @Query('dateTo') dateTo?: string,
+    @Query('timeFrom') timeFrom?: string,
+    @Query('timeTo') timeTo?: string,
+    @Query('campaign') campaign?: string,
+  ) {
+    return this.reportsService.getSalesByHour(
+      user.businessId,
+      dateFrom,
+      dateTo,
+      timeFrom,
+      timeTo,
+      campaign,
+    );
+  }
+
   @Get('top-products')
   getTopProducts(
     @CurrentUser() user: any,

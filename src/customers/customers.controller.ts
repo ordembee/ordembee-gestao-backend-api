@@ -1,3 +1,4 @@
+import { parsePageRequest } from '../common/pagination/pagination';
 import {
   Body,
   Controller,
@@ -25,8 +26,17 @@ export class CustomersController {
   }
 
   @Get()
-  findAll(@CurrentUser() user: any, @Query('search') search?: string) {
-    return this.customersService.findAll(user.businessId, search);
+  findAll(
+    @CurrentUser() user: any,
+    @Query('search') search?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.customersService.findAll(
+      user.businessId,
+      search,
+      parsePageRequest(page, limit),
+    );
   }
 
   @Get(':id')

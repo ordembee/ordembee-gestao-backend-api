@@ -10,12 +10,46 @@ import {
 import { Expense, ExpenseDocument } from '../expenses/schemas/expense.schema';
 import { BusinessService } from '../business/business.service';
 import {
+  instantRangeFilter,
   pureDateFilter,
   zonedDateString,
   zonedEndOfDay,
   zonedStartOfDay,
 } from '../common/date/timezone.util';
 import { normalizeCampaignName } from '../common/campaigns/campaign.util';
+
+export interface SalesByHourBucket {
+  count: number;
+  revenue: number;
+  profit: number;
+}
+
+export interface SalesByHourReport {
+  summary: SalesByHourBucket & {
+    avgTicket: number;
+    peakHour: number | null;
+    peakCount: number;
+  };
+  byHour: (SalesByHourBucket & { hour: number })[];
+  byWeekday: (SalesByHourBucket & { weekday: number })[];
+  /** Células dia da semana × hora (só as que têm venda). weekday: 0 = domingo. */
+  heatmap: (SalesByHourBucket & { weekday: number; hour: number })[];
+  /** Melhor hora de um dia específico (data no fuso do negócio), por vendas e por faturamento. */
+  bestSlots: {
+    byCount: (SalesByHourBucket & { date: string; hour: number }) | null;
+    byRevenue: (SalesByHourBucket & { date: string; hour: number }) | null;
+  };
+}
+
+/** "HH:mm" → minutos desde 00:00; valor ausente/inválido cai no `fallback`. */
+export function parseTimeOfDay(value: string | undefined, fallback: number) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(value ?? '');
+  if (!m) return fallback;
+  const h = Number(m[1]);
+  const min = Number(m[2]);
+  if (h > 23 || min > 59) return fallback;
+  return h * 60 + min;
+}
 
 @Injectable()
 export class ReportsService {
@@ -206,6 +240,177 @@ export class ReportsService {
       profit: r.profit,
       count: r.count,
     }));
+  }
+
+  /**
+   * Vendas por horário do dia (fuso do negócio). Opcionalmente restringe a uma
+   * faixa de horário ("HH:mm") aplicada a cada dia do período — ex.: das 14:00
+   * às 18:00 entre 01/11 e 15/11. Faixa invertida (22:00 → 02:00) atravessa a meia-noite.
+   */
+  async getSalesByHour(
+    businessId: string,
+    dateFrom?: string,
+    dateTo?: string,
+    timeFrom?: string,
+    timeTo?: string,
+    campaign?: string,
+  ): Promise<SalesByHourReport> {
+    const tz = await this.businessService.getTimezone(businessId);
+    const match: Record<string, unknown> = {
+      businessId: new Types.ObjectId(businessId),
+      status: SaleStatus.CONCLUIDA,
+    };
+    if (campaign) {
+      const normalized = normalizeCampaignName(campaign);
+      if (normalized) match.tags = normalized;
+    }
+    const range = instantRangeFilter(dateFrom, dateTo, tz);
+    if (range) match.createdAt = range;
+
+    const from = parseTimeOfDay(timeFrom, 0);
+    const to = parseTimeOfDay(timeTo, 24 * 60 - 1);
+    const fullDay = from === 0 && to === 24 * 60 - 1;
+
+    const minuteExpr = {
+      $add: [
+        { $multiply: [{ $hour: { date: '$createdAt', timezone: tz } }, 60] },
+        { $minute: { date: '$createdAt', timezone: tz } },
+      ],
+    };
+    const pipeline: any[] = [
+      { $match: match },
+      {
+        $addFields: {
+          _minute: minuteExpr,
+          _hour: { $hour: { date: '$createdAt', timezone: tz } },
+          _weekday: { $dayOfWeek: { date: '$createdAt', timezone: tz } },
+        },
+      },
+    ];
+    if (!fullDay) {
+      pipeline.push({
+        $match:
+          from <= to
+            ? { _minute: { $gte: from, $lte: to } }
+            : { $or: [{ _minute: { $gte: from } }, { _minute: { $lte: to } }] },
+      });
+    }
+    const group = (key: string) => ({
+      $group: {
+        _id: key,
+        count: { $sum: 1 },
+        revenue: { $sum: '$total' },
+        profit: { $sum: '$totalProfit' },
+      },
+    });
+    const slotPipeline = (sortField: 'count' | 'revenue') => [
+      {
+        $group: {
+          _id: {
+            d: {
+              $dateToString: { format: '%Y-%m-%d', date: '$createdAt', timezone: tz },
+            },
+            h: '$_hour',
+          },
+          count: { $sum: 1 },
+          revenue: { $sum: '$total' },
+          profit: { $sum: '$totalProfit' },
+        },
+      },
+      { $sort: { [sortField]: -1, '_id.d': -1, '_id.h': 1 } },
+      { $limit: 1 },
+    ];
+    pipeline.push({
+      $facet: {
+        slotByCount: slotPipeline('count'),
+        slotByRevenue: slotPipeline('revenue'),
+        hours: [group('$_hour')],
+        weekdays: [group('$_weekday')],
+        cells: [
+          {
+            $group: {
+              _id: { w: '$_weekday', h: '$_hour' },
+              count: { $sum: 1 },
+              revenue: { $sum: '$total' },
+              profit: { $sum: '$totalProfit' },
+            },
+          },
+        ],
+      },
+    });
+
+    const [res] = await this.saleModel.aggregate(pipeline);
+    const hourMap = new Map<number, any>(
+      (res?.hours ?? []).map((r: any) => [r._id as number, r]),
+    );
+    const dayMap = new Map<number, any>(
+      (res?.weekdays ?? []).map((r: any) => [r._id as number, r]),
+    );
+
+    const byHour = Array.from({ length: 24 }, (_, hour) => {
+      const r = hourMap.get(hour);
+      return {
+        hour,
+        count: r?.count ?? 0,
+        revenue: r?.revenue ?? 0,
+        profit: r?.profit ?? 0,
+      };
+    });
+    // Mongo: 1 = domingo … 7 = sábado → 0..6 (domingo = 0).
+    const byWeekday = Array.from({ length: 7 }, (_, weekday) => {
+      const r = dayMap.get(weekday + 1);
+      return {
+        weekday,
+        count: r?.count ?? 0,
+        revenue: r?.revenue ?? 0,
+        profit: r?.profit ?? 0,
+      };
+    });
+
+    const heatmap = ((res?.cells ?? []) as any[]).map((r) => ({
+      weekday: (r._id.w as number) - 1,
+      hour: r._id.h as number,
+      count: r.count as number,
+      revenue: r.revenue as number,
+      profit: r.profit as number,
+    }));
+
+    const toSlot = (r: any) =>
+      r
+        ? {
+            date: r._id.d as string,
+            hour: r._id.h as number,
+            count: r.count as number,
+            revenue: r.revenue as number,
+            profit: r.profit as number,
+          }
+        : null;
+
+    const count = byHour.reduce((a, h) => a + h.count, 0);
+    const revenue = byHour.reduce((a, h) => a + h.revenue, 0);
+    const profit = byHour.reduce((a, h) => a + h.profit, 0);
+    const peak = byHour.reduce(
+      (best, h) => (h.count > (best?.count ?? 0) ? h : best),
+      null as (typeof byHour)[number] | null,
+    );
+
+    return {
+      summary: {
+        count,
+        revenue,
+        profit,
+        avgTicket: count > 0 ? revenue / count : 0,
+        peakHour: peak ? peak.hour : null,
+        peakCount: peak ? peak.count : 0,
+      },
+      byHour,
+      byWeekday,
+      heatmap,
+      bestSlots: {
+        byCount: toSlot(res?.slotByCount?.[0]),
+        byRevenue: toSlot(res?.slotByRevenue?.[0]),
+      },
+    };
   }
 
   async getTopProducts(

@@ -1,3 +1,8 @@
+import {
+  buildPage,
+  PageRequest,
+  Paginated,
+} from '../common/pagination/pagination';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -37,7 +42,8 @@ export class ExpensesService {
     dateFrom?: string,
     dateTo?: string,
     category?: string,
-  ): Promise<Expense[]> {
+    pageReq?: PageRequest | null,
+  ): Promise<Expense[] | Paginated<Expense>> {
     const tz = await this.businessService.getTimezone(businessId);
     const filter: Record<string, unknown> = {
       businessId: new Types.ObjectId(businessId),
@@ -46,7 +52,14 @@ export class ExpensesService {
     if (dateFilter) filter.date = dateFilter;
     if (category) filter.category = category;
 
-    return this.expenseModel.find(filter).sort({ date: -1 }).lean();
+    const query = this.expenseModel.find(filter).sort({ date: -1, _id: -1 });
+    if (!pageReq) return query.lean();
+
+    const [data, total] = await Promise.all([
+      query.skip(pageReq.skip).limit(pageReq.limit).lean(),
+      this.expenseModel.countDocuments(filter).exec(),
+    ]);
+    return buildPage(data as Expense[], total, pageReq);
   }
 
   async findOne(id: string, businessId: string): Promise<Expense> {

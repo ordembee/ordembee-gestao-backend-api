@@ -1,3 +1,4 @@
+import { parsePageRequest } from '../common/pagination/pagination';
 import {
   BadRequestException,
   Body,
@@ -53,13 +54,22 @@ export class ProductsController {
     @Query('search') search?: string,
     @Query('categoryId') categoryId?: string,
     @Query('includeInactive') includeInactive?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
   ) {
     return this.productsService.findAll(
       user.businessId,
       search,
       categoryId,
       includeInactive === 'true',
+      parsePageRequest(page, limit),
     );
+  }
+
+  /** Declarada antes de `:id` para não ser lida como um id. */
+  @Get('linked-pricings')
+  linkedPricings(@CurrentUser() user: any) {
+    return this.productsService.getLinkedPricings(user.businessId);
   }
 
   @Get(':id')

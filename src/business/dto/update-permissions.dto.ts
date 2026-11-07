@@ -27,6 +27,7 @@ class CaixaPermissionsDto {
   @IsBoolean() @IsOptional() canViewStock?: boolean;
   @IsBoolean() @IsOptional() canPublishMenu?: boolean;
   @IsBoolean() @IsOptional() canToggleMenuItems?: boolean;
+  @IsBoolean() @IsOptional() canEditIngredientPrices?: boolean;
 }
 
 export class UpdatePermissionsDto {

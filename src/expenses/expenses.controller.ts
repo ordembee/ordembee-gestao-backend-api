@@ -1,3 +1,4 @@
+import { parsePageRequest } from '../common/pagination/pagination';
 import {
   Controller,
   Get,
@@ -30,12 +31,15 @@ export class ExpensesController {
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
     @Query('category') category?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
   ) {
     return this.expensesService.findAll(
       user.businessId,
       dateFrom,
       dateTo,
       category,
+      parsePageRequest(page, limit),
     );
   }
 

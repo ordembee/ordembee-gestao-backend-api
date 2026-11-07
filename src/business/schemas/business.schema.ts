@@ -26,6 +26,8 @@ export interface CaixaPermissions {
   canPublishMenu: boolean;
   /** Ativar/desativar itens no cardapio digital. */
   canToggleMenuItems: boolean;
+  /** Editar o preco de compra dos ingredientes simples (aba Precificacao > Ingredientes). */
+  canEditIngredientPrices: boolean;
 }
 
 export interface BusinessPermissions {
@@ -56,6 +58,7 @@ export const DEFAULT_PERMISSIONS: BusinessPermissions = {
     canViewStock: false,
     canPublishMenu: false,
     canToggleMenuItems: false,
+    canEditIngredientPrices: false,
   },
 };
 

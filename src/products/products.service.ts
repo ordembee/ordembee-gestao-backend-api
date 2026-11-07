@@ -1,4 +1,9 @@
 import {
+  buildPage,
+  PageRequest,
+  Paginated,
+} from '../common/pagination/pagination';
+import {
   BadRequestException,
   ConflictException,
   Injectable,
@@ -139,9 +144,10 @@ export class ProductsService {
     search?: string,
     categoryId?: string,
     includeInactive?: boolean,
-  ): Promise<any[]> {
+    pageReq?: PageRequest | null,
+  ): Promise<any[] | Paginated<any>> {
     this.logger.log(
-      `Listando produtos: negócio: ${businessId} | search: "${search || ''}" | categoryId: ${categoryId || 'todos'} | includeInactive: ${includeInactive}`,
+      `Listando produtos: negócio: ${businessId} | search: "${search || ''}" | categoryId: ${categoryId || 'todos'} | includeInactive: ${includeInactive} | página: ${pageReq?.page ?? 'todas'}`,
     );
 
     const filter: any = {
@@ -159,12 +165,44 @@ export class ProductsService {
 
     if (categoryId) filter.categoryId = new Types.ObjectId(categoryId);
 
-    const products = await this.productModel
+    const query = this.productModel
       .find(filter)
       .populate('categoryId', 'name color icon')
-      .sort({ name: 1 })
-      .exec();
-    return this.attachLinkedPricing(businessId, products);
+      .sort({ name: 1, _id: 1 });
+
+    if (!pageReq) {
+      const products = await query.exec();
+      return this.attachLinkedPricing(businessId, products);
+    }
+
+    const [products, total] = await Promise.all([
+      query.skip(pageReq.skip).limit(pageReq.limit).exec(),
+      this.productModel.countDocuments(filter).exec(),
+    ]);
+    // Precificação vinculada só para os itens da página (evita calcular o catálogo todo).
+    const data = await this.attachLinkedPricing(businessId, products);
+    return buildPage(data, total, pageReq);
+  }
+
+  /**
+   * Quais precificações já estão vinculadas a algum produto (ativo ou não).
+   * Leve (só 2 campos): substitui varrer o catálogo inteiro no front para
+   * esconder, no seletor, as precificações já usadas por outro produto.
+   */
+  async getLinkedPricings(
+    businessId: string,
+  ): Promise<{ productId: string; pricingId: string }[]> {
+    const rows = await this.productModel
+      .find({
+        businessId: new Types.ObjectId(businessId),
+        pricingId: { $exists: true, $ne: null },
+      })
+      .select('_id pricingId')
+      .lean();
+    return rows.map((r: any) => ({
+      productId: r._id.toString(),
+      pricingId: r.pricingId.toString(),
+    }));
   }
 
   async findOne(id: string, businessId: string): Promise<any> {

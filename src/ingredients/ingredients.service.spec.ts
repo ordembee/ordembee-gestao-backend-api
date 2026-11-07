@@ -6,7 +6,7 @@ import { IngredientType, IngredientUnit } from './schemas/ingredient.schema';
 // Testa apenas o algoritmo puro de resolução de preço (resolvePrice), que não
 // depende dos models do Mongoose — não precisa de banco de dados para rodar.
 describe('IngredientsService.resolvePrice', () => {
-  const service = new IngredientsService({} as any, {} as any, {} as any);
+  const service = new IngredientsService({} as any, {} as any, {} as any, {} as any);
 
   const leiteId = new Types.ObjectId().toString();
   const cremeId = new Types.ObjectId().toString();
@@ -192,6 +192,7 @@ describe('IngredientsService.ensureOperationalCostIngredient', () => {
     } as any;
     const service = new IngredientsService(
       ingredientModel,
+      {} as any,
       {} as any,
       expensesService,
     );

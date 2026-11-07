@@ -8,11 +8,20 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import {
+  buildPage,
+  PageRequest,
+  Paginated,
+} from '../common/pagination/pagination';
+import {
   Ingredient,
   IngredientDocument,
   IngredientType,
   IngredientUnit,
 } from './schemas/ingredient.schema';
+import {
+  IngredientPriceHistory,
+  IngredientPriceHistoryDocument,
+} from './schemas/ingredient-price-history.schema';
 import { Pricing, PricingDocument } from '../pricings/schemas/pricing.schema';
 import {
   CreateIngredientDto,
@@ -28,6 +37,13 @@ import {
 type LeanIngredient = Ingredient & { _id: Types.ObjectId };
 export type ResolvedIngredient = LeanIngredient & { pricePerUnit: number };
 
+/** Quem fez a mudanca (token Firebase); opcional para chamadas internas. */
+export interface PriceActor {
+  uid?: string;
+  name?: string;
+  role?: string;
+}
+
 export const OPERATIONAL_COST_INGREDIENT_NAME = 'Custo Operacional';
 
 @Injectable()
@@ -37,6 +53,8 @@ export class IngredientsService {
   constructor(
     @InjectModel(Ingredient.name)
     private readonly ingredientModel: Model<IngredientDocument>,
+    @InjectModel(IngredientPriceHistory.name)
+    private readonly historyModel: Model<IngredientPriceHistoryDocument>,
     @InjectModel(Pricing.name)
     private readonly pricingModel: Model<PricingDocument>,
     private readonly expensesService: ExpensesService,
@@ -173,9 +191,49 @@ export class IngredientsService {
     });
   }
 
+  /** Grava um ponto do histórico; falha aqui nunca derruba o salvamento do ingrediente. */
+  private async recordPrice(
+    businessId: string,
+    ing: {
+      _id: Types.ObjectId | string;
+      name: string;
+      unit?: IngredientUnit;
+      purchasePrice?: number;
+      quantityPurchased?: number;
+    },
+    previousPricePerUnit: number | null,
+    actor?: PriceActor,
+    opts: { effectiveAt?: Date; isBaseline?: boolean } = {},
+  ): Promise<void> {
+    try {
+      const purchasePrice = ing.purchasePrice ?? 0;
+      const quantityPurchased = ing.quantityPurchased ?? 1;
+      await this.historyModel.create({
+        businessId: new Types.ObjectId(businessId),
+        ingredientId: new Types.ObjectId(String(ing._id)),
+        ingredientName: ing.name,
+        unit: ing.unit,
+        purchasePrice,
+        quantityPurchased,
+        pricePerUnit: purchasePrice / quantityPurchased,
+        previousPricePerUnit,
+        effectiveAt: opts.effectiveAt ?? new Date(),
+        isBaseline: opts.isBaseline ?? false,
+        changedByUid: actor?.uid,
+        changedByName: actor?.name,
+        changedByRole: actor?.role,
+      });
+    } catch (e) {
+      this.logger.error(
+        `Falha ao gravar histórico de preço ${String(ing._id)}: ${(e as Error).message}`,
+      );
+    }
+  }
+
   async create(
     businessId: string,
     dto: CreateIngredientDto,
+    actor?: PriceActor,
   ): Promise<ResolvedIngredient> {
     const bizObj = new Types.ObjectId(businessId);
     const data: any = {
@@ -200,6 +258,9 @@ export class IngredientsService {
     }
 
     const created = await this.ingredientModel.create(data);
+    if (dto.type === IngredientType.SIMPLES) {
+      await this.recordPrice(businessId, created, null, actor);
+    }
     this.logger.log(
       `Ingrediente criado: ${created._id.toString()} | negócio: ${businessId} | tipo: ${dto.type}`,
     );
@@ -211,7 +272,8 @@ export class IngredientsService {
     type?: IngredientType,
     search?: string,
     includeInactive?: boolean,
-  ): Promise<ResolvedIngredient[]> {
+    pageReq?: PageRequest | null,
+  ): Promise<ResolvedIngredient[] | Paginated<ResolvedIngredient>> {
     await this.ensureOperationalCostIngredient(businessId);
     const filter: any = {
       businessId: new Types.ObjectId(businessId),
@@ -220,12 +282,25 @@ export class IngredientsService {
     if (type) filter.type = type;
     if (search) filter.name = { $regex: search, $options: 'i' };
 
-    const docs = await this.ingredientModel
-      .find(filter)
-      .sort({ name: 1 })
-      .lean<LeanIngredient[]>();
+    if (!pageReq) {
+      const docs = await this.ingredientModel
+        .find(filter)
+        .sort({ name: 1 })
+        .lean<LeanIngredient[]>();
+      return this.withComputedPrices(docs, businessId);
+    }
 
-    return this.withComputedPrices(docs, businessId);
+    const [docs, total] = await Promise.all([
+      this.ingredientModel
+        .find(filter)
+        .sort({ name: 1, _id: 1 })
+        .skip(pageReq.skip)
+        .limit(pageReq.limit)
+        .lean<LeanIngredient[]>(),
+      this.ingredientModel.countDocuments(filter).exec(),
+    ]);
+    // Preço calculado só para a página (compostos resolvem seus componentes).
+    return buildPage(await this.withComputedPrices(docs, businessId), total, pageReq);
   }
 
   async findOne(id: string, businessId: string): Promise<ResolvedIngredient> {
@@ -242,6 +317,7 @@ export class IngredientsService {
     id: string,
     businessId: string,
     dto: UpdateIngredientDto,
+    actor?: PriceActor,
   ): Promise<ResolvedIngredient> {
     const bizObj = new Types.ObjectId(businessId);
     const existing = await this.ingredientModel.findOne({
@@ -297,6 +373,30 @@ export class IngredientsService {
     const updated = await this.ingredientModel
       .findOneAndUpdate({ _id: id, businessId: bizObj }, update, { new: true })
       .lean<LeanIngredient>();
+
+    if (existing.type === IngredientType.SIMPLES) {
+      const before =
+        (existing.purchasePrice ?? 0) / (existing.quantityPurchased ?? 1);
+      const after =
+        (updated!.purchasePrice ?? 0) / (updated!.quantityPurchased ?? 1);
+      if (before !== after) {
+        // Ingrediente anterior ao histórico: registra o preço antigo como ponto de partida.
+        const hasHistory = await this.historyModel.exists({
+          businessId: bizObj,
+          ingredientId: existing._id,
+        });
+        if (!hasHistory) {
+          await this.recordPrice(businessId, existing, null, undefined, {
+            effectiveAt:
+              existing.priceUpdatedAt ??
+              (existing as any).updatedAt ??
+              new Date(),
+            isBaseline: true,
+          });
+        }
+        await this.recordPrice(businessId, updated!, before, actor);
+      }
+    }
     this.logger.log(`Ingrediente atualizado: ${id} | negócio: ${businessId}`);
     return (await this.withComputedPrices([updated!], businessId))[0];
   }
@@ -379,5 +479,81 @@ export class IngredientsService {
       yield: yieldValue,
     } as LeanIngredient);
     this.resolvePrice(id, map, new Map(), new Set());
+  }
+
+  /** Pontos do histórico (mais antigo primeiro), opcionalmente de um ingrediente e período. */
+  async getPriceHistory(
+    businessId: string,
+    opts: { ingredientId?: string; from?: Date; to?: Date } = {},
+  ) {
+    const filter: any = { businessId: new Types.ObjectId(businessId) };
+    if (opts.ingredientId) {
+      filter.ingredientId = new Types.ObjectId(opts.ingredientId);
+    }
+    if (opts.from || opts.to) {
+      filter.effectiveAt = {
+        ...(opts.from ? { $gte: opts.from } : {}),
+        ...(opts.to ? { $lte: opts.to } : {}),
+      };
+    }
+    return this.historyModel
+      .find(filter)
+      .sort({ effectiveAt: 1 })
+      .limit(2000)
+      .lean();
+  }
+
+  /**
+   * Variação por ingrediente no período: preço vigente no início (último ponto
+   * antes de `from`, ou o primeiro dentro do período) × preço no fim.
+   */
+  async getPriceVariation(businessId: string, from: Date, to: Date) {
+    const biz = new Types.ObjectId(businessId);
+    const rows = await this.historyModel
+      .find({ businessId: biz, effectiveAt: { $lte: to } })
+      .sort({ effectiveAt: 1 })
+      .lean();
+
+    const byIng = new Map<string, typeof rows>();
+    for (const r of rows) {
+      const k = r.ingredientId.toString();
+      if (!byIng.has(k)) byIng.set(k, []);
+      byIng.get(k)!.push(r);
+    }
+
+    const result: {
+      ingredientId: string;
+      ingredientName: string;
+      unit?: IngredientUnit;
+      startPrice: number;
+      endPrice: number;
+      changePercent: number | null;
+      changes: number;
+    }[] = [];
+
+    for (const [ingredientId, list] of byIng) {
+      const before = list.filter((r) => r.effectiveAt < from);
+      const within = list.filter((r) => r.effectiveAt >= from);
+      if (within.length === 0) continue; // sem mudança no período
+      const start = before.length ? before[before.length - 1] : within[0];
+      const end = within[within.length - 1];
+      const changes = within.filter((r) => !r.isBaseline).length;
+      result.push({
+        ingredientId,
+        ingredientName: end.ingredientName,
+        unit: end.unit,
+        startPrice: start.pricePerUnit,
+        endPrice: end.pricePerUnit,
+        changePercent:
+          start.pricePerUnit > 0
+            ? ((end.pricePerUnit - start.pricePerUnit) / start.pricePerUnit) *
+              100
+            : null,
+        changes,
+      });
+    }
+    return result.sort(
+      (a, b) => Math.abs(b.changePercent ?? 0) - Math.abs(a.changePercent ?? 0),
+    );
   }
 }
