@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Param,
+  ParseIntPipe,
   Patch,
   Post,
   Query,
@@ -12,10 +13,13 @@ import { PanelCheckoutService } from './panel-checkout.service';
 import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { Role } from '../common/enums/role.enum';
+import { PaymentMethod } from '../common/enums/payment-method.enum';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { UpdateOrderDto } from './dto/update-order.dto';
 import { UpdateOrderStatusDto } from './dto/update-order-status.dto';
 import { AddOrderPaymentDto } from './dto/add-order-payment.dto';
+import { UpdateOrderPaymentMethodDto } from './dto/update-order-payment-method.dto';
+import { ChoosePaymentMethodDto } from './dto/choose-payment-method.dto';
 import { DeliverOrderDto } from './dto/deliver-order.dto';
 import { OrderStatus } from './schemas/order.schema';
 
@@ -128,6 +132,47 @@ export class OrdersController {
     @Body() dto: AddOrderPaymentDto,
   ) {
     return this.ordersService.addPayment(id, user.businessId, user.uid, dto);
+  }
+
+  /** Como o cliente vai pagar o que falta; Online prepara o link da InfinitePay. */
+  @Patch(':id/payment-choice')
+  async choosePaymentMethod(
+    @CurrentUser() user: any,
+    @Param('id') id: string,
+    @Body() dto: ChoosePaymentMethodDto,
+  ) {
+    const options = await this.panelCheckout.options(user.businessId);
+    const order = await this.ordersService.choosePaymentMethod(
+      id,
+      user.businessId,
+      dto,
+      options.infinitePay,
+    );
+    if (
+      dto.method === PaymentMethod.PAGAMENTO_ONLINE &&
+      !(order as any).infinitePay?.checkoutUrl
+    ) {
+      await this.panelCheckout.ensureLink(id, user.businessId);
+      return this.ordersService.findOne(id, user.businessId);
+    }
+    return order;
+  }
+
+  /** Corrige a forma de um pagamento ja registrado (so o dono). */
+  @Patch(':id/payments/:index')
+  @Roles(Role.OWNER)
+  updatePaymentMethod(
+    @CurrentUser() user: any,
+    @Param('id') id: string,
+    @Param('index', ParseIntPipe) index: number,
+    @Body() dto: UpdateOrderPaymentMethodDto,
+  ) {
+    return this.ordersService.updatePaymentMethod(
+      id,
+      user.businessId,
+      index,
+      dto,
+    );
   }
 
   /** Conclui a encomenda: quita o saldo e registra a venda do dia. */

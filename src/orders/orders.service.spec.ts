@@ -540,3 +540,222 @@ describe('OrdersService — pagamento online pendente (InfinitePay)', () => {
     ).rejects.toThrow('InfinitePay');
   });
 });
+
+describe('OrdersService — trocar forma de pagamento', () => {
+  function orderWith(over: Record<string, any> = {}): any {
+    return {
+      code: 7,
+      status: OrderStatus.PENDENTE,
+      total: 100,
+      payments: [
+        { method: PaymentMethod.PIX, amount: 40 },
+        { method: PaymentMethod.DINHEIRO, amount: 30 },
+      ],
+      markModified: jest.fn(),
+      save: jest.fn().mockResolvedValue(undefined),
+      ...over,
+    };
+  }
+  function build(order: any, salesService: any = {}) {
+    const service = buildService({ salesService });
+    jest.spyOn(service as any, 'requireOrder').mockResolvedValue(order);
+    jest.spyOn(service, 'findOne').mockResolvedValue(order);
+    return service;
+  }
+
+  it('troca só o método e não mexe na venda quando ainda não foi entregue', async () => {
+    const order = orderWith();
+    const updatePayments = jest.fn();
+    const service = build(order, { updatePayments });
+    await service.updatePaymentMethod('o', 'b', 0, {
+      method: PaymentMethod.CARTAO_DEBITO,
+    });
+    expect(order.payments[0]).toEqual({
+      method: PaymentMethod.CARTAO_DEBITO,
+      amount: 40,
+    });
+    expect(order.save).toHaveBeenCalled();
+    expect(updatePayments).not.toHaveBeenCalled();
+  });
+
+  it('refaz o extrato da venda (com fiado do saldo) depois da entrega', async () => {
+    const order = orderWith({
+      status: OrderStatus.ENTREGUE,
+      saleId: new Types.ObjectId(),
+    });
+    const updatePayments = jest.fn();
+    const service = build(order, { updatePayments });
+    await service.updatePaymentMethod('o', 'b', 1, {
+      method: PaymentMethod.PIX,
+    });
+    expect(updatePayments).toHaveBeenCalledWith(
+      order.saleId.toString(),
+      'b',
+      [
+        { method: PaymentMethod.PIX, amount: 70 },
+        { method: PaymentMethod.FIADO, amount: 30 },
+      ],
+    );
+  });
+
+  it('recusa fiado, índice inexistente e pedido cancelado', async () => {
+    const service = build(orderWith());
+    await expect(
+      service.updatePaymentMethod('o', 'b', 0, { method: PaymentMethod.FIADO }),
+    ).rejects.toThrow(BadRequestException);
+    await expect(
+      service.updatePaymentMethod('o', 'b', 9, { method: PaymentMethod.PIX }),
+    ).rejects.toThrow('Pagamento não encontrado');
+    const cancelled = build(orderWith({ status: OrderStatus.CANCELADA }));
+    await expect(
+      cancelled.updatePaymentMethod('o', 'b', 0, {
+        method: PaymentMethod.PIX,
+      }),
+    ).rejects.toThrow(BadRequestException);
+  });
+});
+
+describe('OrdersService — pagamento online não é editável', () => {
+  it('recusa trocar pagamento confirmado pela InfinitePay (marca ou instante)', async () => {
+    const at = new Date('2026-10-31T16:11:00Z');
+    const order: any = {
+      code: 1,
+      status: OrderStatus.ENTREGUE,
+      total: 100,
+      infinitePay: { paidAt: at },
+      payments: [
+        { method: PaymentMethod.PIX, amount: 60, source: 'INFINITEPAY', paidAt: new Date() },
+        { method: PaymentMethod.PIX, amount: 40, paidAt: at }, // legado, sem marca
+        { method: PaymentMethod.DINHEIRO, amount: 0.01, paidAt: new Date() },
+      ],
+      markModified: jest.fn(),
+      save: jest.fn(),
+    };
+    const service = buildService();
+    jest.spyOn(service as any, 'requireOrder').mockResolvedValue(order);
+    jest.spyOn(service, 'findOne').mockResolvedValue(order);
+    for (const i of [0, 1]) {
+      await expect(
+        service.updatePaymentMethod('o', 'b', i, { method: PaymentMethod.DINHEIRO }),
+      ).rejects.toThrow('InfinitePay');
+    }
+    await expect(
+      service.updatePaymentMethod('o', 'b', 2, { method: PaymentMethod.PIX }),
+    ).resolves.toBeDefined();
+  });
+});
+
+describe('OrdersService — escolher forma de pagamento', () => {
+  function build(order: any) {
+    const service = buildService();
+    jest.spyOn(service as any, 'requireOrder').mockResolvedValue(order);
+    jest.spyOn(service, 'findOne').mockResolvedValue(order);
+    return service;
+  }
+  const base = (over: Record<string, any> = {}): any => ({
+    code: 5,
+    status: OrderStatus.PENDENTE,
+    total: 50,
+    payments: [],
+    requestedPayment: { method: PaymentMethod.DINHEIRO, changeFor: 100 },
+    save: jest.fn().mockResolvedValue(undefined),
+    ...over,
+  });
+
+  it('Online prepara a cobrança do saldo e marca como pré-pago', async () => {
+    const order = base();
+    await build(order).choosePaymentMethod(
+      'o',
+      'b',
+      { method: PaymentMethod.PAGAMENTO_ONLINE },
+      true,
+    );
+    expect(order.infinitePay.chargeAmount).toBe(50);
+    expect(order.infinitePay.orderNsu).toBeTruthy();
+    expect(order.requestedPayment).toEqual({
+      method: PaymentMethod.PAGAMENTO_ONLINE,
+      prepaid: true,
+    });
+  });
+
+  it('outras formas viram a forma combinada, sem criar cobrança', async () => {
+    const order = base({ requestedPayment: undefined });
+    await build(order).choosePaymentMethod(
+      'o',
+      'b',
+      { method: PaymentMethod.CARTAO_CREDITO, brand: 'visa', changeFor: 10 },
+      false,
+    );
+    expect(order.infinitePay).toBeUndefined();
+    expect(order.requestedPayment).toMatchObject({
+      method: PaymentMethod.CARTAO_CREDITO,
+      brand: 'visa',
+      changeFor: undefined,
+    });
+  });
+
+  it('recusa: online sem InfinitePay, link já gerado, pagamento confirmado e pedido pago', async () => {
+    await expect(
+      build(base()).choosePaymentMethod('o', 'b', { method: PaymentMethod.PAGAMENTO_ONLINE }, false),
+    ).rejects.toThrow('InfinitePay');
+    await expect(
+      build(base({ infinitePay: { orderNsu: 'x' } })).choosePaymentMethod('o', 'b', { method: PaymentMethod.PIX }, true),
+    ).rejects.toThrow('link de pagamento');
+    await expect(
+      build(base({ infinitePay: { orderNsu: 'x', paidAt: new Date() } })).choosePaymentMethod('o', 'b', { method: PaymentMethod.PIX }, true),
+    ).rejects.toThrow('confirmado');
+    await expect(
+      build(base({ payments: [{ method: PaymentMethod.PIX, amount: 50 }] })).choosePaymentMethod('o', 'b', { method: PaymentMethod.PIX }, true),
+    ).rejects.toThrow('já está pago');
+  });
+});
+
+describe('OrdersService — cliente pagou por fora com link pendente', () => {
+  function build(order: any) {
+    const service = buildService({
+      userModel: { findOne: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue({ _id: new Types.ObjectId() }) }) },
+    });
+    jest.spyOn(service as any, 'requireOrder').mockResolvedValue(order);
+    jest.spyOn(service as any, 'requireUser').mockResolvedValue({ _id: new Types.ObjectId() });
+    jest.spyOn(service, 'findOne').mockResolvedValue(order);
+    return service;
+  }
+  const pending = (): any => ({
+    code: 9,
+    status: OrderStatus.PENDENTE,
+    total: 20,
+    payments: [],
+    infinitePay: { orderNsu: 'x', checkoutUrl: 'u' },
+    requestedPayment: { method: PaymentMethod.PAGAMENTO_ONLINE, prepaid: true },
+    save: jest.fn().mockResolvedValue(undefined),
+  });
+
+  it('sem a marca, continua recusando pagamento manual com link pendente', async () => {
+    await expect(
+      build(pending()).addPayment('o', 'b', 'u', { method: PaymentMethod.DINHEIRO, amount: 20 }),
+    ).rejects.toThrow('InfinitePay');
+  });
+
+  it('com replaceOnlineLink descarta o link e registra o pagamento', async () => {
+    const order = pending();
+    await build(order).addPayment('o', 'b', 'u', {
+      method: PaymentMethod.DINHEIRO,
+      amount: 20,
+      replaceOnlineLink: true,
+    });
+    expect(order.infinitePay).toBeUndefined();
+    expect(order.payments).toHaveLength(1);
+    expect(order.payments[0]).toMatchObject({ method: PaymentMethod.DINHEIRO, amount: 20 });
+    expect(order.requestedPayment).toEqual({ method: PaymentMethod.DINHEIRO });
+  });
+
+  it('não aceita registrar "online" à mão', async () => {
+    await expect(
+      build(pending()).addPayment('o', 'b', 'u', {
+        method: PaymentMethod.PAGAMENTO_ONLINE,
+        amount: 20,
+        replaceOnlineLink: true,
+      }),
+    ).rejects.toThrow('só é registrado');
+  });
+});

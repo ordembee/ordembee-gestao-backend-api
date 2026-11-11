@@ -585,6 +585,7 @@ export class InfinitePayService {
           amount: chargeAmount,
           kind: OrderPaymentKind.SINAL,
           paidAt: now,
+          source: 'INFINITEPAY',
         },
       };
     }

@@ -112,6 +112,13 @@ export class IngredientsController {
     );
   }
 
+  /** Apaga um ponto do histórico de preços (irreversível). Só o dono. */
+  @Delete('price-history/:pointId')
+  @Roles(Role.OWNER)
+  deletePricePoint(@CurrentUser() user: any, @Param('pointId') pointId: string) {
+    return this.ingredientsService.deletePricePoint(pointId, user.businessId);
+  }
+
   @Get(':id')
   findOne(@CurrentUser() user: any, @Param('id') id: string) {
     return this.ingredientsService.findOne(id, user.businessId);

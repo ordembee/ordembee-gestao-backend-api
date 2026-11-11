@@ -481,6 +481,40 @@ export class IngredientsService {
     this.resolvePrice(id, map, new Map(), new Set());
   }
 
+  /**
+   * Apaga um ponto do historico de preco. Nao mexe no preco atual do
+   * ingrediente; o ponto seguinte passa a "vir de" onde o apagado vinha, para a
+   * variacao dele nao apontar para um preco que deixou de existir no historico.
+   */
+  async deletePricePoint(
+    pointId: string,
+    businessId: string,
+  ): Promise<{ deleted: true }> {
+    if (!Types.ObjectId.isValid(pointId)) {
+      throw new NotFoundException('Ponto do histórico não encontrado');
+    }
+    const biz = new Types.ObjectId(businessId);
+    const point = await this.historyModel
+      .findOneAndDelete({ _id: pointId, businessId: biz })
+      .lean();
+    if (!point) {
+      throw new NotFoundException('Ponto do histórico não encontrado');
+    }
+    await this.historyModel.findOneAndUpdate(
+      {
+        businessId: biz,
+        ingredientId: point.ingredientId,
+        effectiveAt: { $gt: point.effectiveAt },
+      },
+      { $set: { previousPricePerUnit: point.previousPricePerUnit ?? null } },
+      { sort: { effectiveAt: 1 } },
+    );
+    this.logger.log(
+      `Ponto do histórico de preços apagado: ${pointId} (ingrediente ${point.ingredientId.toString()}) | negócio: ${businessId}`,
+    );
+    return { deleted: true };
+  }
+
   /** Pontos do histórico (mais antigo primeiro), opcionalmente de um ingrediente e período. */
   async getPriceHistory(
     businessId: string,

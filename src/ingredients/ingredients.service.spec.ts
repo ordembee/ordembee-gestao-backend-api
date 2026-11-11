@@ -231,3 +231,36 @@ describe('IngredientsService.ensureOperationalCostIngredient', () => {
     expect(update.$setOnInsert.purchasePrice).toBeUndefined();
   });
 });
+
+describe('IngredientsService.deletePricePoint', () => {
+  const bizId = new Types.ObjectId().toString();
+  const pointId = new Types.ObjectId().toString();
+  const ingredientId = new Types.ObjectId();
+
+  function build(found: any) {
+    const historyModel = {
+      findOneAndDelete: jest.fn().mockReturnValue({ lean: jest.fn().mockResolvedValue(found) }),
+      findOneAndUpdate: jest.fn().mockResolvedValue({}),
+    };
+    const service = new IngredientsService({} as any, historyModel as any, {} as any, {} as any);
+    return { service, historyModel };
+  }
+
+  it('apaga o ponto do negócio e religa o seguinte ao preço anterior', async () => {
+    const effectiveAt = new Date('2026-10-01');
+    const { service, historyModel } = build({ ingredientId, effectiveAt, previousPricePerUnit: 5 });
+    await expect(service.deletePricePoint(pointId, bizId)).resolves.toEqual({ deleted: true });
+    expect(String(historyModel.findOneAndDelete.mock.calls[0][0].businessId)).toBe(bizId);
+    const [filter, update, opts] = historyModel.findOneAndUpdate.mock.calls[0];
+    expect(filter.effectiveAt).toEqual({ $gt: effectiveAt });
+    expect(update.$set.previousPricePerUnit).toBe(5);
+    expect(opts.sort).toEqual({ effectiveAt: 1 });
+  });
+
+  it('recusa ponto inexistente, de outro negócio ou id inválido', async () => {
+    const { service, historyModel } = build(null);
+    await expect(service.deletePricePoint(pointId, bizId)).rejects.toThrow(NotFoundException);
+    await expect(service.deletePricePoint('x', bizId)).rejects.toThrow(NotFoundException);
+    expect(historyModel.findOneAndUpdate).not.toHaveBeenCalled();
+  });
+});

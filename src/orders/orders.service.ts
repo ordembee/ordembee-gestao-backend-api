@@ -5,6 +5,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import {
@@ -34,6 +35,8 @@ import {
 import { UpdateOrderDto } from './dto/update-order.dto';
 import { DeliverOrderDto } from './dto/deliver-order.dto';
 import { AddOrderPaymentDto } from './dto/add-order-payment.dto';
+import { UpdateOrderPaymentMethodDto } from './dto/update-order-payment-method.dto';
+import { ChoosePaymentMethodDto } from './dto/choose-payment-method.dto';
 import { Product, ProductDocument } from '../products/schemas/product.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import {
@@ -1306,10 +1309,29 @@ export class OrdersService {
   ): Promise<Order & OrderWithTotals> {
     const order = await this.requireOrder(id, businessId);
     this.assertEditable(order);
-    this.assertManualPaymentAllowed(order);
+    const discardLink =
+      !!dto.replaceOnlineLink &&
+      !!order.infinitePay?.orderNsu &&
+      !order.infinitePay.paidAt;
+    if (discardLink && dto.method === PaymentMethod.PAGAMENTO_ONLINE) {
+      throw new BadRequestException(
+        'Pagamento online só é registrado pela confirmação da InfinitePay.',
+      );
+    }
+    if (!discardLink) this.assertManualPaymentAllowed(order);
     const user = await this.requireUser(firebaseUid);
 
     this.assertPaymentsFit([dto], order.total, this.amountPaidOf(order));
+
+    if (discardLink) {
+      // O link deixa de valer no sistema; se o cliente ainda pagar por ele, o
+      // valor fica na InfinitePay sem pedido (estorno manual).
+      order.infinitePay = undefined;
+      order.requestedPayment = { method: dto.method };
+      this.logger.warn(
+        `Link InfinitePay descartado na encomenda #${order.code}: cliente pagou por fora (${dto.method}) | negócio: ${businessId}`,
+      );
+    }
 
     order.payments.push({
       method: dto.method,
@@ -1322,6 +1344,194 @@ export class OrdersService {
 
     this.logger.log(
       `Pagamento registrado na encomenda #${order.code}: ${dto.method} ${dto.amount} | negócio: ${businessId}`,
+    );
+    return this.findOne(id, businessId);
+  }
+
+  /**
+   * Extrato da venda: uma linha por forma de pagamento (sinal + quitacao
+   * somados), mais o que sobrou como fiado. Soma sempre o total do pedido.
+   */
+  private buildSalePayments(
+    order: OrderDocument,
+  ): { method: PaymentMethod; amount: number }[] {
+    const byMethod = new Map<PaymentMethod, number>();
+    for (const payment of order.payments) {
+      byMethod.set(
+        payment.method,
+        this.round((byMethod.get(payment.method) ?? 0) + payment.amount),
+      );
+    }
+    const paid = this.amountPaidOf(order);
+    const remaining = Math.max(0, this.round(order.total - paid));
+    if (remaining > 0.009) {
+      byMethod.set(
+        PaymentMethod.FIADO,
+        this.round((byMethod.get(PaymentMethod.FIADO) ?? 0) + remaining),
+      );
+    }
+    const salePayments = Array.from(byMethod.entries())
+      .filter(([, amount]) => amount > 0)
+      .map(([method, amount]) => ({ method, amount }));
+    if (salePayments.length === 0) {
+      salePayments.push({ method: PaymentMethod.DINHEIRO, amount: 0 });
+    }
+    return salePayments;
+  }
+
+  /**
+   * Forma como o cliente vai pagar o que falta. Online (InfinitePay) prepara a
+   * cobranca (o link e gerado em seguida); as demais ficam como forma combinada
+   * para a entrega. Pagamento ja confirmado pela InfinitePay nao muda.
+   */
+  async choosePaymentMethod(
+    id: string,
+    businessId: string,
+    dto: ChoosePaymentMethodDto,
+    onlineAvailable: boolean,
+  ): Promise<Order & OrderWithTotals> {
+    const order = await this.requireOrder(id, businessId);
+    this.assertEditable(order);
+    if (order.infinitePay?.paidAt) {
+      throw new BadRequestException(
+        'O pagamento online já foi confirmado pela InfinitePay e não pode ser alterado.',
+      );
+    }
+    const due = this.round(order.total - this.amountPaidOf(order));
+    if (due <= 0.009) {
+      throw new BadRequestException('Este pedido já está pago.');
+    }
+    if (dto.method === PaymentMethod.FIADO) {
+      throw new BadRequestException(
+        'Fiado nasce do saldo não pago na entrega e não pode ser escolhido aqui.',
+      );
+    }
+
+    const pendingLink = !!order.infinitePay?.orderNsu;
+    if (dto.method === PaymentMethod.PAGAMENTO_ONLINE) {
+      if (!pendingLink) {
+        if (!onlineAvailable) {
+          throw new BadRequestException(
+            'A InfinitePay não está habilitada para esta loja.',
+          );
+        }
+        if (order.deliveryFeePending) {
+          throw new BadRequestException(
+            'Informe a taxa de entrega antes de cobrar pelo link de pagamento.',
+          );
+        }
+        if (due < 1) {
+          throw new BadRequestException(
+            'A InfinitePay só cobra a partir de R$ 1,00.',
+          );
+        }
+        order.infinitePay = { orderNsu: randomUUID(), chargeAmount: due };
+      }
+      order.requestedPayment = {
+        method: PaymentMethod.PAGAMENTO_ONLINE,
+        prepaid: true,
+      };
+    } else {
+      if (pendingLink) {
+        // O link ja pode estar com o cliente: trocar agora deixaria um pagamento sem pedido.
+        throw new BadRequestException(
+          'Este pedido já tem link de pagamento online. Aguarde o pagamento ou cancele o pedido.',
+        );
+      }
+      const keepPrepaid =
+        !!order.requestedPayment?.prepaid &&
+        order.requestedPayment.method === dto.method;
+      order.requestedPayment = {
+        method: dto.method,
+        brand:
+          dto.method === PaymentMethod.CARTAO_CREDITO ||
+          dto.method === PaymentMethod.CARTAO_DEBITO
+            ? dto.brand
+            : undefined,
+        changeFor:
+          dto.method === PaymentMethod.DINHEIRO ? dto.changeFor : undefined,
+        prepaid: keepPrepaid || undefined,
+      };
+    }
+    await order.save();
+    this.logger.log(
+      `Forma de pagamento escolhida na encomenda #${order.code}: ${dto.method} | negócio: ${businessId}`,
+    );
+    return this.findOne(id, businessId);
+  }
+
+  /**
+   * Pagamento confirmado pela InfinitePay (online). Os antigos nao tem a marca
+   * `source`: sao reconhecidos por terem o mesmo instante da confirmacao.
+   */
+  private isOnlinePayment(
+    order: OrderDocument,
+    payment: { source?: string; paidAt?: Date },
+  ): boolean {
+    if (payment.source === 'INFINITEPAY') return true;
+    const confirmedAt = order.infinitePay?.paidAt;
+    return (
+      !!confirmedAt &&
+      !!payment.paidAt &&
+      new Date(payment.paidAt).getTime() === new Date(confirmedAt).getTime()
+    );
+  }
+
+  /**
+   * Troca a forma de pagamento de um pagamento ja registrado (so o metodo; o
+   * valor nao muda). Vale tambem depois da entrega: o extrato da venda e
+   * refeito a partir dos pagamentos do pedido, para os dois nao divergirem.
+   */
+  async updatePaymentMethod(
+    id: string,
+    businessId: string,
+    index: number,
+    dto: UpdateOrderPaymentMethodDto,
+  ): Promise<Order & OrderWithTotals> {
+    const order = await this.requireOrder(id, businessId);
+    if (order.status === OrderStatus.CANCELADA) {
+      throw new BadRequestException(
+        'Esta encomenda foi cancelada e não pode mais ser alterada',
+      );
+    }
+    const payment = order.payments?.[index];
+    if (!payment) {
+      throw new NotFoundException('Pagamento não encontrado');
+    }
+    if (this.isOnlinePayment(order, payment)) {
+      throw new BadRequestException(
+        'Este pagamento foi confirmado pela InfinitePay e não pode ser alterado.',
+      );
+    }
+    if (dto.method === PaymentMethod.PAGAMENTO_ONLINE) {
+      throw new BadRequestException(
+        'Pagamento online só é registrado pela confirmação da InfinitePay.',
+      );
+    }
+    if (dto.method === PaymentMethod.FIADO) {
+      throw new BadRequestException(
+        'Fiado não pode ser escolhido aqui: ele nasce do saldo não pago na entrega.',
+      );
+    }
+    if (payment.method === dto.method) {
+      return this.findOne(id, businessId);
+    }
+
+    const from = payment.method;
+    payment.method = dto.method;
+    order.markModified('payments');
+    await order.save();
+
+    if (order.saleId) {
+      await this.salesService.updatePayments(
+        order.saleId.toString(),
+        businessId,
+        this.buildSalePayments(order),
+      );
+    }
+
+    this.logger.log(
+      `Forma de pagamento alterada na encomenda #${order.code}: ${from} → ${dto.method} | negócio: ${businessId}`,
     );
     return this.findOne(id, businessId);
   }
@@ -1344,7 +1554,7 @@ export class OrdersService {
   }
 
   private assertPaymentsFit(
-    payments: OrderPaymentDto[] | AddOrderPaymentDto[],
+    payments: { amount: number }[],
     total: number,
     alreadyPaid: number,
   ): void {
@@ -1419,29 +1629,7 @@ export class OrdersService {
       });
     }
 
-    // Extrato da venda: uma linha por forma de pagamento (sinal + quitacao
-    // somados), mais o que sobrou como fiado.
-    const byMethod = new Map<PaymentMethod, number>();
-    for (const payment of order.payments) {
-      byMethod.set(
-        payment.method,
-        this.round((byMethod.get(payment.method) ?? 0) + payment.amount),
-      );
-    }
-    const paid = this.amountPaidOf(order);
-    const remaining = Math.max(0, this.round(order.total - paid));
-    if (remaining > 0.009) {
-      byMethod.set(
-        PaymentMethod.FIADO,
-        this.round((byMethod.get(PaymentMethod.FIADO) ?? 0) + remaining),
-      );
-    }
-    const salePayments = Array.from(byMethod.entries())
-      .filter(([, amount]) => amount > 0)
-      .map(([method, amount]) => ({ method, amount }));
-    if (salePayments.length === 0) {
-      salePayments.push({ method: PaymentMethod.DINHEIRO, amount: 0 });
-    }
+    const salePayments = this.buildSalePayments(order);
 
     const sale = await this.salesService.createFromOrder({
       businessId,

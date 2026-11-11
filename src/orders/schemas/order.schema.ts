@@ -123,6 +123,14 @@ class OrderPayment {
 
   @Prop({ type: Types.ObjectId, ref: 'User' })
   userId?: Types.ObjectId;
+
+  /**
+   * Origem do pagamento. `INFINITEPAY` = confirmado pela InfinitePay (pagamento
+   * online): nao e editavel. Ausente = registrado a mao na loja (Pix, dinheiro,
+   * cartao na maquininha). Pagamentos antigos sem marca: ver `isOnlinePayment`.
+   */
+  @Prop({ type: String, enum: ['INFINITEPAY'] })
+  source?: 'INFINITEPAY';
 }
 
 @Schema({ _id: false })

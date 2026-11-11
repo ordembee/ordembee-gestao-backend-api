@@ -233,4 +233,15 @@ export class PanelCheckoutService {
       }
     }
   }
+
+  /** Gera o link de um pedido que passou para pagamento online; se falhar, o operador gera de novo pelo detalhe. */
+  async ensureLink(orderId: string, businessId: string): Promise<void> {
+    try {
+      await this.infinitePay.ensureCheckoutById(orderId, businessId);
+    } catch (error) {
+      this.logger.warn(
+        `Pedido ${orderId} sem link InfinitePay: ${(error as Error).message}`,
+      );
+    }
+  }
 }
