@@ -918,6 +918,8 @@ export class OrdersService {
     since?: string,
   ): Promise<{
     serverTime: string;
+    /** Pedidos do cardapio ainda em PENDENTE (o painel repete o alerta enquanto > 0). */
+    pendingCount: number;
     orders: {
       _id: string;
       code: number;
@@ -931,6 +933,14 @@ export class OrdersService {
     const floor = new Date(now.getTime() - 24 * 60 * 60 * 1000);
     const parsed = since ? new Date(since) : now;
     const from = isNaN(parsed.getTime()) || parsed < floor ? floor : parsed;
+
+    const pendingCount = await this.orderModel
+      .countDocuments({
+        businessId: new Types.ObjectId(businessId),
+        source: OrderSource.CARDAPIO,
+        status: OrderStatus.PENDENTE,
+      })
+      .exec();
 
     const orders = await this.orderModel
       .find({
@@ -955,6 +965,7 @@ export class OrdersService {
 
     return {
       serverTime: now.toISOString(),
+      pendingCount,
       orders: orders.map((o) => ({
         _id: String(o._id),
         code: o.code,

@@ -342,11 +342,16 @@ describe('OrdersService — feed de pedidos do cardápio', () => {
         }),
       }),
     }));
-    return { service: buildService({ orderModel: { find } }), find };
+    const countDocuments = jest.fn(() => ({ exec: () => Promise.resolve(3) }));
+    return {
+      service: buildService({ orderModel: { find, countDocuments } }),
+      find,
+      countDocuments,
+    };
   }
 
   it('só busca pedidos do cardápio depois de `since`', async () => {
-    const { service, find } = feedService([
+    const { service, find, countDocuments } = feedService([
       {
         _id: new Types.ObjectId(),
         code: 7,
@@ -371,6 +376,11 @@ describe('OrdersService — feed de pedidos do cardápio', () => {
       total: 20,
     });
     expect(typeof result.serverTime).toBe('string');
+    expect(result.pendingCount).toBe(3);
+    expect((countDocuments.mock.calls[0] as any[])[0]).toMatchObject({
+      source: 'CARDAPIO',
+      status: 'PENDENTE',
+    });
   });
 
   it('limita a janela a 24h quando `since` é antigo ou inválido', async () => {

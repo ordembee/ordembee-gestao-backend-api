@@ -8,6 +8,10 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import {
+  Customer,
+  CustomerDocument,
+} from '../customers/schemas/customer.schema';
+import {
   Business,
   BusinessDocument,
   InfinitePaySettings,
@@ -81,6 +85,8 @@ export class InfinitePayService {
     @InjectModel(MenuOnline.name)
     private readonly menuModel: Model<MenuOnlineDocument>,
     private readonly client: InfinitePayClient,
+    @InjectModel(Customer.name)
+    private readonly customerModel?: Model<CustomerDocument>,
   ) {}
 
   /* ---------------------------- Configuracao ---------------------------- */
@@ -250,6 +256,21 @@ export class InfinitePayService {
     return !!(await this.activeConfig(new Types.ObjectId(businessId)));
   }
 
+  private async syncCustomerPhone(order: OrderDocument): Promise<void> {
+    if (!order.customerId || !this.customerModel) return;
+    const customer = await this.customerModel
+      .findOne({ _id: order.customerId, businessId: order.businessId })
+      .select('phone')
+      .lean<{ phone?: string }>()
+      .exec();
+    if (!customer?.phone || customer.phone === order.customerPhone) return;
+    this.logger.log(
+      `Telefone do pedido #${order.code} atualizado pelo cadastro do cliente antes de gerar o link`,
+    );
+    order.customerPhone = customer.phone;
+    await order.save();
+  }
+
   private async checkoutFor(
     order: OrderDocument,
     redirectUrl?: string,
@@ -271,6 +292,10 @@ export class InfinitePayService {
     if (order.status === OrderStatus.CANCELADA) {
       throw new BadRequestException('Este pedido foi cancelado');
     }
+
+    // O pedido guarda uma copia do telefone da hora em que foi feito; se o cadastro
+    // foi corrigido depois (numero digitado errado), o link novo sai com o atual.
+    await this.syncCustomerPhone(order);
 
     // Pedido do painel pode cobrar so um sinal (ou ter desconto de campanha): nesses casos o
     // link tem uma linha so, no valor cobrado, com os itens na descricao. Do contrario, um por item.

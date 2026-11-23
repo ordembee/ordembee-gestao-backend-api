@@ -5,6 +5,10 @@ import {
   MenuOnline,
   MenuOnlineSchema,
 } from '../menu/schemas/menu-online.schema';
+import {
+  Customer,
+  CustomerSchema,
+} from '../customers/schemas/customer.schema';
 import { Order, OrderSchema } from '../orders/schemas/order.schema';
 import { InternalSignatureGuard } from '../common/guards/internal-signature.guard';
 import { InfinitePayClient } from './infinitepay.client';
@@ -23,6 +27,7 @@ import {
       { name: Business.name, schema: BusinessSchema },
       { name: MenuOnline.name, schema: MenuOnlineSchema },
       { name: Order.name, schema: OrderSchema },
+      { name: Customer.name, schema: CustomerSchema },
     ]),
   ],
   controllers: [
